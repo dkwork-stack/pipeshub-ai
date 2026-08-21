@@ -22,9 +22,9 @@ interface KbAppsMigrationFlag {
 const MONGO_BATCH_SIZE = 100;
 
 /** Exponential-backoff constants for waiting on the connector service's KB-apps migration. */
-const KB_APPS_WAIT_MAX_ATTEMPTS = 10;
+const KB_APPS_WAIT_MAX_ATTEMPTS = 2;
 const KB_APPS_WAIT_INITIAL_DELAY_MS = 2_000;
-const KB_APPS_WAIT_MAX_DELAY_MS = 30_000;
+const KB_APPS_WAIT_MAX_DELAY_MS = 5_000;
 
 /**
  * One-time backfill that relocates stale Knowledge-Base filter chips stored on
