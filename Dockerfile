@@ -17,8 +17,7 @@ FROM ${PYTHON_DEPS_IMAGE} AS python-deps
 # compile here when a new dependency needs it.
 WORKDIR /app/python
 COPY backend/python/pyproject.toml ./
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --system -e . && \
+RUN uv pip install --system -e . && \
     crawl4ai-setup && \
     playwright install chromium
 
@@ -30,8 +29,7 @@ FROM ${RUNTIME_BASE_IMAGE} AS runtime-base
 # wrapper present but unable to load PPT/PPTX files.
 # Install CJK fallback fonts until they are available in the published runtime
 # base image. LibreOffice uses these when documents reference unavailable fonts.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-impress-nogui fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -45,8 +43,7 @@ COPY backend/nodejs/apps/package*.json ./
 COPY backend/nodejs/apps/tsconfig.json ./
 
 # Install dependencies with architecture handling (npm ci: lockfile-speed + reproducible)
-RUN --mount=type=cache,id=npm-cache,target=/root/.npm,sharing=locked \
-    set -e; \
+RUN set -e; \
     ARCH=$(uname -m); \
     echo "Building for architecture: $ARCH"; \
     if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
@@ -75,8 +72,7 @@ WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
 
-RUN --mount=type=cache,id=unique-cache-name,target=/some/path,sharing=locked \
-    npm config set legacy-peer-deps true && \
+RUN npm config set legacy-peer-deps true && \
     npm ci
 
 COPY frontend/ ./
