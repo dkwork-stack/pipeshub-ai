@@ -92,16 +92,24 @@ class OAuthScopes(str, Enum):
     TEAM_READ = "team:read"
     TEAM_WRITE = "team:write"
 
+    # Customer Feature Intelligence
+    INTELLIGENCE_READ = "intelligence:read"
+    INTELLIGENCE_WRITE = "intelligence:write"
+
 
 class DefaultEndpoints(Enum):
     """Constants for default endpoints"""
 
-    CONNECTOR_ENDPOINT = "http://localhost:8088"
-    INDEXING_ENDPOINT = "http://localhost:8091"
-    QUERY_ENDPOINT = "http://localhost:8000"
-    NODEJS_ENDPOINT = "http://localhost:3000"
-    FRONTEND_ENDPOINT = "http://localhost:3001"
-    STORAGE_ENDPOINT = "http://localhost:3000"  # noqa: PIE796
+    # 127.0.0.1 (not "localhost") avoids IPv6/IPv4 dual-stack resolution
+    # mismatches seen in some sandboxed container runtimes (e.g. Railway),
+    # where the server binds IPv4-only but the client resolves "localhost"
+    # to the IPv6 loopback first and fails to connect.
+    CONNECTOR_ENDPOINT = "http://127.0.0.1:8088"
+    INDEXING_ENDPOINT = "http://127.0.0.1:8091"
+    QUERY_ENDPOINT = "http://127.0.0.1:8000"
+    NODEJS_ENDPOINT = "http://127.0.0.1:3000"
+    FRONTEND_ENDPOINT = "http://127.0.0.1:3001"
+    STORAGE_ENDPOINT = "http://127.0.0.1:3000"  # noqa: PIE796
 
 class Routes(Enum):
     """Constants for routes"""

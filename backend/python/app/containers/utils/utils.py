@@ -293,6 +293,29 @@ class ContainerUtils:
         from app.services.extraction.client import ExtractionClient  # noqa: PLC0415
         return ExtractionClient()
 
+    async def create_intelligence_store(self, logger: Logger) -> object:
+        """Async factory for the Customer Feature Intelligence store (IIntelligenceStore)."""
+        from app.services.intelligence_store.intelligence_store_factory import (  # noqa: PLC0415
+            IntelligenceStoreFactory,
+        )
+        return await IntelligenceStoreFactory.create_store(logger=logger)
+
+    async def create_customer_intelligence_ingestion_service(
+        self,
+        logger: Logger,
+        intelligence_store: object,
+        extraction_client: "ExtractionClient",  # type: ignore[name-defined]
+    ) -> object:
+        """Async factory for CustomerIntelligenceIngestionService."""
+        from app.modules.customer_intelligence.ingestion_service import (  # noqa: PLC0415
+            CustomerIntelligenceIngestionService,
+        )
+        return CustomerIntelligenceIngestionService(
+            logger=logger,
+            intelligence_store=intelligence_store,
+            extraction_client=extraction_client,
+        )
+
     async def create_retrieval_service(
         self,
         config_service: ConfigurationService,

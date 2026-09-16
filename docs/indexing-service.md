@@ -413,6 +413,7 @@ If a deployment still stalls with `blocked` true and both gates full, the node i
 | Parsing service route with its own gate + 429 | `backend/python/app/api/routes/parsing.py` |
 | Pipeline and sinks | `backend/python/app/modules/transformers/{pipeline,sink_orchestrator,vectorstore,blob_storage,graphdb}.py` |
 | Governor / consumer unit tests | `backend/python/tests/unit/services/messaging/`, `tests/unit/services/resource_governor/` |
+| Customer Feature Intelligence store, intake/read API, ingestion (additive, see §8) | `backend/python/app/services/intelligence_store/`, `app/api/routes/intelligence.py`, `app/modules/customer_intelligence/` |
 
 ## 7. Tunables that matter for throughput
 
@@ -428,3 +429,89 @@ If a deployment still stalls with `blocked` true and both gates full, the node i
 | `GOVERNOR_EMBEDDING_CPU_RESERVATION` | 2 (≤ 25% of quota) | CPUs withheld from heavy parse when embeddings are local |
 | `INDEXING_SPLIT_LEASE_POOLS` | false | separate cluster-wide light indexing lease |
 | `MAX_DELIVERY_ATTEMPTS` / `REDIS_MAX_DELIVERIES` | 3 / 10 | failure retries / delivery backstop |
+
+## 8. Customer Feature Intelligence (additive)
+
+A connector-agnostic capability layered onto this service to turn customer
+support/CRM/call/revenue data into revenue-weighted, citation-backed product
+feature-gap intelligence for CPOs/VPs/PMs. It is additive: a MySQL outage
+here must never block core document indexing (see `initialize_container()`
+in `app/containers/indexing.py`, which logs and continues on failure instead
+of raising).
+
+### 8.1 Why connector-agnostic instead of new connector-registry integrations
+
+The existing connector registry (`app/connectors/sources/...`) wires OAuth,
+sync scheduling, and filters per source and is 1,000–6,000+ lines per
+connector. Building full registry integrations for Freshdesk, Zendesk,
+Salesforce, Gong, Outreach, Chargebee, and every future source was out of
+scope for this pass. Instead, every source — existing or future — maps its
+data onto two small connector-agnostic contracts and POSTs to a single
+intake API:
+
+- `CustomerSignalEvent` (`app/models/intelligence.py`): one ticket, CRM
+  note/case, call transcript, or uploaded document/row of raw text.
+- `CustomerRevenueSnapshot`: one point-in-time MRR/ARR/seats/renewal-date
+  snapshot for a customer (e.g. from Chargebee).
+
+This satisfies "support every connector, including future ones" without
+rebuilding registry machinery: any adapter is just a thin mapper + HTTP POST.
+
+### 8.2 Data flow
+
+```
+Freshdesk / Salesforce / Chargebee / file upload (scripts/customer_intelligence/*)
+        │  maps source data -> CustomerSignalEvent / CustomerRevenueSnapshot
+        ▼
+POST /api/v1/intelligence/events | /revenue-snapshots   (this service, org-scoped)
+        │
+        ├─ events -> extraction service's FeatureIntelligenceExtractor (LLM,
+        │            app/modules/extraction/feature_intelligence_extraction.py)
+        │            -> pain points + feature-gap candidates, each with a
+        │               verbatim excerpt (citation/evidence)
+        │
+        ▼
+CustomerIntelligenceIngestionService (app/modules/customer_intelligence/ingestion_service.py)
+        │  writes customers / revenue_snapshots / feature_gap_mentions
+        │  recomputes feature_gap_scores (revenue x breadth x log(mentions),
+        │  see scoring.py) via IIntelligenceStore
+        ▼
+MySQL (IIntelligenceStore / IntelligenceStoreFactory — never touched
+        directly by feature code, same pattern as IGraphDBProvider/IVectorDBService)
+        ▲
+        │  GET /api/v1/intelligence/feature-gaps | /customers  (read side)
+        │
+Future standalone UI/service (not built in this pass)
+```
+
+### 8.3 Adapters shipped in this pass
+
+| Adapter | Reuses | Script |
+| --- | --- | --- |
+| Chargebee (MRR/ARR/seats/renewal) | new minimal `ChargebeeClient`/`ChargebeeDataSource` (`app/sources/{client,external}/chargebee/`) | `scripts/customer_intelligence/chargebee_sync.py` |
+| Freshdesk (tickets + conversations) | existing `FreshDeskClient`/`FreshdeskDataSource` | `scripts/customer_intelligence/freshdesk_sync.py` |
+| Salesforce (Cases via SOQL) | existing `SalesforceDataSource.soql_query` | `scripts/customer_intelligence/salesforce_sync.py` |
+| CSV / PDF / document upload | CSV: parsed directly (structured, not a parsing-service job). PDF/docs: reuses the existing KB upload pipeline end-to-end — Node `POST /api/v1/kb/:kbId/upload`, poll `GET /api/v1/kb/record/:recordId`, fetch parsed text via `GET /api/v1/records/{id}/content` — no duplicate parsing logic. | `scripts/customer_intelligence/file_upload.py` |
+
+All four are standalone scripts, not connectors wired into the registry —
+run them by hand, via cron, or as a Kubernetes CronJob per adapter. There is
+no scheduler built in this pass; each script documents its required env vars
+in its module docstring and is idempotent (safe to re-run on a schedule).
+
+### 8.4 Store and API
+
+- Table/interface/factory: `app/services/intelligence_store/mysql/schema.py`,
+  `interface/intelligence_store.py` (`IIntelligenceStore`),
+  `intelligence_store_factory.py`. Env: `INTELLIGENCE_STORE_TYPE`,
+  `INTELLIGENCE_MYSQL_*` (see `backend/env.template`).
+- Every table carries `org_id`; every route reads `request.state.user["orgId"]`
+  and rejects (403) a client-supplied `org_id` that doesn't match — this is
+  the only multi-tenant-ready slice of the fork today.
+- Routes are mounted on this service (port 8091), not proxied through the
+  Node.js gateway — `pipeshub-openapi.yaml` was intentionally not updated.
+  If these routes need public/gateway exposure later, add them there.
+- Tests: `backend/python/tests/unit/customer_intelligence/` (scoring formula,
+  API auth/org-scoping, all mocked — no MySQL needed) and
+  `backend/python/tests/integration/customer_intelligence/` (real MySQL
+  CRUD + idempotent-upsert + score recomputation; skips if no server is
+  reachable, same pattern as `tests/integration/vector_db/`).

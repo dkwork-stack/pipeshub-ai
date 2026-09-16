@@ -129,6 +129,20 @@ class IndexingAppContainer(BaseAppContainer):
         container_utils.create_extraction_client,
     )
 
+    # Customer Feature Intelligence: MySQL-backed store + ingestion service.
+    # Additive to the graph/vector stores above — see AGENTS.md pluggable-store table.
+    intelligence_store = providers.Resource(
+        container_utils.create_intelligence_store,
+        logger=logger,
+    )
+
+    customer_intelligence_ingestion_service = providers.Resource(
+        container_utils.create_customer_intelligence_ingestion_service,
+        logger=logger,
+        intelligence_store=intelligence_store,
+        extraction_client=extraction_client,
+    )
+
     event_processor = providers.Resource(
         container_utils.create_event_processor,
         logger=logger,
@@ -167,6 +181,21 @@ async def initialize_container(container: IndexingAppContainer) -> bool:
         # Store the resolved graph_provider in the container to avoid coroutine reuse
         container._graph_provider = graph_provider
         logger.info("✅ Graph Database Provider initialized and connected")
+
+        # Customer Feature Intelligence store — additive to the existing graph/vector
+        # pipeline (see AGENTS.md pluggable-store table), so a MySQL outage here must
+        # not block core document indexing: log and continue, the /api/v1/intelligence/*
+        # routes simply 500 until it recovers.
+        logger.info("Ensuring Customer Feature Intelligence store is initialized")
+        try:
+            intelligence_store = await container.intelligence_store()
+            if not intelligence_store:
+                raise Exception("intelligence_store() returned falsy")
+            logger.info("✅ Customer Feature Intelligence store initialized and connected")
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Customer Feature Intelligence store unavailable, continuing without it: {e}"
+            )
 
         await Health.system_health_check(container)
         return True

@@ -22,6 +22,9 @@ from fastapi.responses import JSONResponse
 
 from app.containers.extraction import ExtractionAppContainer, initialize_container
 from app.modules.transformers.document_extraction import DocumentExtraction
+from app.modules.extraction.feature_intelligence_extraction import (
+    FeatureIntelligenceExtractor,
+)
 from app.api.routes.extraction import router as extraction_router
 
 logger = logging.getLogger("extraction_main")
@@ -74,6 +77,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.document_extraction = DocumentExtraction(
         logger=app_logger,
         graph_provider=_NoOpGraphProvider(),
+        config_service=config_service,
+    )
+    app.state.feature_intelligence_extractor = FeatureIntelligenceExtractor(
+        logger=app_logger,
         config_service=config_service,
     )
 

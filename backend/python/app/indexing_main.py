@@ -1443,6 +1443,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 from app.api.middlewares.request_context import RequestContextMiddleware
+from app.api.routes.intelligence import router as intelligence_router
 from app.utils.request_context import set_service_suffix
 
 set_service_suffix("-is")
@@ -1458,6 +1459,8 @@ app = FastAPI(
 app.add_middleware(RequestContextMiddleware)
 # Telemetry: metrics middleware + pusher (started/stopped in lifespan).
 telemetry = setup_telemetry(app, service_name="indexing_service")
+
+app.include_router(intelligence_router)
 
 
 @app.get("/health")

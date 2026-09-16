@@ -1,0 +1,102 @@
+# Customer Feature Intelligence store. Additive to arango/neo4j/qdrant above
+# (see AGENTS.md pluggable-store table) — disabled by default, and never
+# required for core document indexing to come up.
+{{- if .Values.mysqlIntelligence.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pipeshub-ai.fullname" . }}-mysql-intelligence
+  labels:
+    {{- include "pipeshub-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql-intelligence
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pipeshub-ai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mysql-intelligence
+  template:
+    metadata:
+      labels:
+        {{- include "pipeshub-ai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mysql-intelligence
+    spec:
+      containers:
+        - name: mysql-intelligence
+          image: "{{ .Values.mysqlIntelligence.image.repository }}:{{ .Values.mysqlIntelligence.image.tag }}"
+          imagePullPolicy: {{ .Values.mysqlIntelligence.image.pullPolicy }}
+          ports:
+            - containerPort: 3306
+              name: mysql
+          env:
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysqlIntelligence.auth.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.mysqlIntelligence.auth.username | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pipeshub-ai.mysqlIntelligenceSecretName" . }}
+                  key: mysql-intelligence-password
+            - name: MYSQL_RANDOM_ROOT_PASSWORD
+              value: "yes"
+          volumeMounts:
+            - name: mysql-intelligence-data
+              mountPath: /var/lib/mysql
+          resources:
+            {{- toYaml .Values.mysqlIntelligence.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: mysql-intelligence-data
+        {{- if .Values.mysqlIntelligence.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "pipeshub-ai.fullname" . }}-mysql-intelligence
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pipeshub-ai.fullname" . }}-mysql-intelligence
+  labels:
+    {{- include "pipeshub-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql-intelligence
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: mysql
+      protocol: TCP
+      name: mysql
+  selector:
+    {{- include "pipeshub-ai.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql-intelligence
+
+---
+
+{{- if .Values.mysqlIntelligence.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pipeshub-ai.fullname" . }}-mysql-intelligence
+  labels:
+    {{- include "pipeshub-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql-intelligence
+spec:
+  accessModes:
+    {{- toYaml .Values.mysqlIntelligence.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.mysqlIntelligence.persistence.size }}
+  {{- if .Values.mysqlIntelligence.persistence.storageClass }}
+  storageClassName: {{ .Values.mysqlIntelligence.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

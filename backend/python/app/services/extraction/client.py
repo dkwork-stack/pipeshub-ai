@@ -89,3 +89,36 @@ class ExtractionClient(BaseServiceClient):
             return None
 
         return SemanticMetadata(**classification_dict)
+
+    async def extract_feature_intelligence(
+        self,
+        text: str,
+        org_id: str,
+    ) -> "FeatureIntelligenceExtractionResult | None":
+        """Call ``POST /api/v1/extract/feature-intelligence``.
+
+        Returns evidence-backed pain points / feature gaps for a single
+        CustomerSignalEvent's text, or ``None`` on an explicit failure
+        response (raises :class:`ExtractionClientError` in that case, mirroring
+        :meth:`classify`).
+        """
+        from app.models.intelligence import (  # noqa: PLC0415
+            FeatureIntelligenceExtractionResult,
+        )
+
+        payload = {"text": text, "org_id": org_id}
+        response = await self._post_json(
+            "/api/v1/extract/feature-intelligence",
+            payload,
+            operation="feature_intelligence",
+        )
+        body = response.json()
+
+        if not body.get("success"):
+            error_msg = body.get("error") or "Feature intelligence extraction failed"
+            raise ExtractionClientError(message=error_msg)
+
+        result_dict = body.get("result")
+        if result_dict is None:
+            return None
+        return FeatureIntelligenceExtractionResult(**result_dict)

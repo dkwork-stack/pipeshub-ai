@@ -46,6 +46,7 @@ secretManagement:
     neo4jSecretName: ""
     arangoSecretName: ""
     qdrantSecretName: ""
+    mysqlIntelligenceSecretName: ""
 
 image:
   repository: pipeshubai/pipeshub-ai
@@ -539,6 +540,32 @@ arango:
     capabilities:
       drop:
       - ALL
+
+# Customer Feature Intelligence store (see backend/python/app/services/intelligence_store).
+# Disabled by default; enable and set auth.password to turn it on.
+mysqlIntelligence:
+  enabled: false
+  image:
+    repository: mysql
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+  auth:
+    database: pipeshub_intelligence
+    username: pipeshub
+    password: ""
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClass: "" # Fill
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
 
 etcd:
   enabled: false

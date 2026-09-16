@@ -193,6 +193,17 @@ Get the name of the secret containing Qdrant credentials
 {{- end }}
 
 {{/*
+Get the name of the secret containing MySQL Intelligence credentials
+*/}}
+{{- define "pipeshub-ai.mysqlIntelligenceSecretName" -}}
+{{- if .Values.secretManagement.existingSecrets.enabled }}
+{{- .Values.secretManagement.existingSecrets.mysqlIntelligenceSecretName | default (include "pipeshub-ai.secretName" .) }}
+{{- else }}
+{{- printf "%s-secrets" (include "pipeshub-ai.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Validate required secrets are provided when not using external or existing secrets
 This helper is called during template rendering to fail fast with clear error messages
 */}}
@@ -226,6 +237,11 @@ This helper is called during template rendering to fail fast with clear error me
     {{- /* Validate ArangoDB credentials */ -}}
     {{- if and .Values.arango.enabled (not .Values.arango.auth.rootPassword) }}
       {{- fail "arango.auth.rootPassword is required when ArangoDB is enabled. Set via --set arango.auth.rootPassword=<password>" }}
+    {{- end }}
+
+    {{- /* Validate MySQL Intelligence credentials */ -}}
+    {{- if and .Values.mysqlIntelligence.enabled (not .Values.mysqlIntelligence.auth.password) }}
+      {{- fail "mysqlIntelligence.auth.password is required when mysqlIntelligence is enabled. Set via --set mysqlIntelligence.auth.password=<password>" }}
     {{- end }}
   {{- end }}
 {{- else }}

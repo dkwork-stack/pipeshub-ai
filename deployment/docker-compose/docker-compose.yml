@@ -302,6 +302,15 @@ services:
       # Set to "true" to defer graph enrichment until after vectordb indexing completes
       - DEFER_EXTRACTION=${DEFER_EXTRACTION:-false}
 
+      # Customer Feature Intelligence — additive MySQL store (see AGENTS.md
+      # pluggable-store table). Not required for core document indexing.
+      - INTELLIGENCE_STORE_TYPE=${INTELLIGENCE_STORE_TYPE:-mysql}
+      - INTELLIGENCE_MYSQL_HOST=${INTELLIGENCE_MYSQL_HOST:-mysql-intelligence}
+      - INTELLIGENCE_MYSQL_PORT=${INTELLIGENCE_MYSQL_PORT:-3306}
+      - INTELLIGENCE_MYSQL_USER=${INTELLIGENCE_MYSQL_USER:-pipeshub}
+      - INTELLIGENCE_MYSQL_PASSWORD=${INTELLIGENCE_MYSQL_PASSWORD:-}
+      - INTELLIGENCE_MYSQL_DATABASE=${INTELLIGENCE_MYSQL_DATABASE:-pipeshub_intelligence}
+
       - VECTOR_COLLECTION_STRATEGY=${VECTOR_COLLECTION_STRATEGY:-single}
 
     depends_on:
@@ -324,6 +333,9 @@ services:
         condition: service_healthy
         required: false
       kafka-1:
+        condition: service_healthy
+        required: false
+      mysql-intelligence:
         condition: service_healthy
         required: false
       sandbox-image:
@@ -389,6 +401,28 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 3s
+      retries: 5
+
+  # Customer Feature Intelligence store. Additive to mongodb/qdrant/graph
+  # above — see AGENTS.md pluggable-store table. Not required for core
+  # document indexing (see `required: false` on the app's depends_on).
+  mysql-intelligence:
+    image: mysql:8.0
+    restart: always
+    environment:
+      - MYSQL_DATABASE=${INTELLIGENCE_MYSQL_DATABASE:-pipeshub_intelligence}
+      - MYSQL_USER=${INTELLIGENCE_MYSQL_USER:-pipeshub}
+      - MYSQL_PASSWORD=${INTELLIGENCE_MYSQL_PASSWORD:-}
+      - MYSQL_ALLOW_EMPTY_PASSWORD=${INTELLIGENCE_MYSQL_PASSWORD:+no}
+      - MYSQL_RANDOM_ROOT_PASSWORD=yes
+    volumes:
+      - mysql_intelligence_data:/var/lib/mysql
+    networks:
+      - pipeshub
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   redis:
@@ -599,6 +633,8 @@ services:
 
 volumes:
   mongodb_data:
+    driver: local
+  mysql_intelligence_data:
     driver: local
   redis_data:
     driver: local
