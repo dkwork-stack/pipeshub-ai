@@ -63,6 +63,10 @@ export const OAuthScopeNames = Object.freeze({
   CRAWL_WRITE: 'crawl:write',
   CRAWL_DELETE: 'crawl:delete',
 
+  // Customer Feature Intelligence
+  INTELLIGENCE_READ: 'intelligence:read',
+  INTELLIGENCE_WRITE: 'intelligence:write',
+
   // OpenID Connect / Identity
   OPENID: 'openid',
   PROFILE: 'profile',

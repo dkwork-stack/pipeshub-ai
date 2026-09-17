@@ -23,10 +23,14 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
+# SQLite only autoincrements INTEGER primary keys; MySQL keeps BIGINT. Lets the
+# same table definitions back the in-memory SQLite engine used by unit tests.
+PrimaryKeyInt = BigInteger().with_variant(Integer, "sqlite")
+
 customers = Table(
     "customers",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
     Column("org_id", String(128), nullable=False),
     Column("external_customer_id", String(255), nullable=False),
     Column("customer_name", String(512), nullable=False),
@@ -39,7 +43,7 @@ customers = Table(
 revenue_snapshots = Table(
     "revenue_snapshots",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
     Column("org_id", String(128), nullable=False),
     Column("external_customer_id", String(255), nullable=False),
     Column("source_connector", String(64), nullable=False),
@@ -56,7 +60,7 @@ revenue_snapshots = Table(
 feature_gaps = Table(
     "feature_gaps",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
     Column("org_id", String(128), nullable=False),
     Column("feature_name", String(512), nullable=False),
     Column("created_at", DateTime, nullable=False),
@@ -66,7 +70,7 @@ feature_gaps = Table(
 feature_gap_mentions = Table(
     "feature_gap_mentions",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
     Column("org_id", String(128), nullable=False),
     # Kept short (vs. customers.customer_name/feature_gaps.feature_name) so the
     # 4-column unique key below stays under MySQL's 3072-byte utf8mb4 index
@@ -95,7 +99,7 @@ feature_gap_mentions = Table(
 feature_gap_scores = Table(
     "feature_gap_scores",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
     Column("org_id", String(128), nullable=False),
     Column("feature_name", String(512), nullable=False),
     Column("total_arr_at_stake", Float, nullable=False, default=0.0),

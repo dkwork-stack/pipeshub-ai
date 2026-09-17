@@ -203,6 +203,7 @@
   },
   "nav": {
     "collections": "컬렉션",
+    "intelligence": "Feature Intelligence",
     "allRecords": "모든 레코드",
     "workspace": "워크스페이스",
     "shared": "나와 공유됨",

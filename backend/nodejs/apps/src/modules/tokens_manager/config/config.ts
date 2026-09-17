@@ -20,6 +20,7 @@ export interface AppConfig {
   connectorBackend: string;
   connectorPublicUrl: string;
   indexingBackend: string;
+  intelligenceBackend: string;
   kafka: {
     brokers: string[];
     ssl?: boolean;
@@ -109,6 +110,7 @@ export const loadAppConfig = async (): Promise<AppConfig> => {
     connectorBackend: await configService.getConnectorUrl(),
     connectorPublicUrl: await configService.getConnectorPublicUrl(),
     indexingBackend: await configService.getIndexingUrl(),
+    intelligenceBackend: await configService.getIntelligenceUrl(),
     aiBackend: await configService.getAiBackendUrl(),
     storageBackend: await configService.getStorageBackendUrl(),
     tokenBackend: await configService.getTokenBackendUrl(),

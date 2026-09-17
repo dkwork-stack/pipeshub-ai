@@ -203,6 +203,7 @@
   },
   "nav": {
     "collections": "集合",
+    "intelligence": "Feature Intelligence",
     "allRecords": "所有记录",
     "workspace": "工作区",
     "shared": "与我共享",

@@ -312,6 +312,17 @@ tags:
       - `monthly`: Run on specified day of the month
       - `custom`: Use cron expression for complex schedules
       - `once`: Run once at a specific future time
+
+  - name: Customer Feature Intelligence
+    description: |
+      Read-only portal API over the Customer Feature Intelligence store (MySQL).
+      Feature gaps inferred from support tickets, CRM notes, call transcripts and file uploads,
+      weighted by each customer's revenue (ARR/MRR) and backed by verbatim citations.
+
+      Proxied by the Node gateway to the Python intelligence service (port 8094). Every response is
+      scoped to the caller's organization from the verified token — no `orgId` parameter is accepted.
+      The intake/write surface (`/intelligence/events`, `/intelligence/revenue-snapshots`) lives on the
+      indexing service and is not part of this gateway.
 components:
   securitySchemes:
     bearerAuth:
@@ -384,6 +395,8 @@ components:
             crawl:read: Read crawling jobs
             crawl:write: Create and manage crawling jobs
             crawl:delete: Delete crawling jobs
+            intelligence:read: Read customer feature-gap intelligence, revenue impact and evidence
+            intelligence:write: Submit customer signals and revenue snapshots for intelligence extraction
         clientCredentials:
           tokenUrl: /api/v1/oauth2/token
           scopes:
@@ -423,6 +436,8 @@ components:
             config:write: Update system configuration
             crawl:read: Read crawling jobs
             crawl:write: Create and manage crawling jobs
+            intelligence:read: Read customer feature-gap intelligence, revenue impact and evidence
+            intelligence:write: Submit customer signals and revenue snapshots for intelligence extraction
 
   schemas:
     # ==================== COMMON SCHEMAS ====================
@@ -14162,6 +14177,213 @@ components:
         totalPages:
           type: integer
           description: Total number of pages
+
+    # ==================== CUSTOMER FEATURE INTELLIGENCE ====================
+    IntelligencePageMeta:
+      type: object
+      required: [total, limit, offset, has_more]
+      properties:
+        total:
+          type: integer
+          description: Total matches for the applied filters
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+    IntelligenceRevenue:
+      type: object
+      description: Latest revenue snapshot for a customer
+      required: [source_connector, mrr, arr, snapshot_at]
+      properties:
+        source_connector:
+          type: string
+          example: chargebee
+        mrr:
+          type: number
+        arr:
+          type: number
+        seats_used:
+          type: integer
+          nullable: true
+        seats_licensed:
+          type: integer
+          nullable: true
+        consumed_features:
+          type: array
+          items:
+            type: string
+        renewal_date:
+          type: string
+          format: date-time
+          nullable: true
+        snapshot_at:
+          type: string
+          format: date-time
+    IntelligenceInsight:
+      type: object
+      description: One feature gap as seen from a single customer (aggregated over its mentions)
+      required: [feature_name, mention_count, max_confidence, last_mentioned_at]
+      properties:
+        feature_name:
+          type: string
+        mention_count:
+          type: integer
+        max_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        last_mentioned_at:
+          type: string
+          format: date-time
+        source_connectors:
+          type: array
+          items:
+            type: string
+    IntelligenceMention:
+      type: object
+      description: One piece of evidence — what the customer said, where, and a deep link back to the source
+      required: [external_customer_id, feature_name, description, confidence, excerpt, source_connector, source_type, external_event_id, occurred_at]
+      properties:
+        external_customer_id:
+          type: string
+        feature_name:
+          type: string
+        description:
+          type: string
+        confidence:
+          type: number
+        excerpt:
+          type: string
+          description: Verbatim excerpt supporting the feature gap
+        source_connector:
+          type: string
+          example: freshdesk
+        source_type:
+          type: string
+          enum: [support_ticket, crm_note, call_transcript, document_upload]
+        external_event_id:
+          type: string
+        citation_url:
+          type: string
+          nullable: true
+        occurred_at:
+          type: string
+          format: date-time
+    IntelligenceFeatureGap:
+      type: object
+      required: [feature_name, total_arr_at_stake, total_mrr_at_stake, customer_count, mention_count, score]
+      properties:
+        feature_name:
+          type: string
+          example: Bulk CSV export
+        total_arr_at_stake:
+          type: number
+        total_mrr_at_stake:
+          type: number
+        customer_count:
+          type: integer
+        mention_count:
+          type: integer
+        score:
+          type: number
+          description: Revenue-weighted priority score (higher = more important)
+        top_customers:
+          type: array
+          items:
+            type: string
+    IntelligenceAffectedCustomer:
+      type: object
+      required: [external_customer_id, customer_name, arr, mrr, mention_count]
+      properties:
+        external_customer_id:
+          type: string
+        customer_name:
+          type: string
+        arr:
+          type: number
+        mrr:
+          type: number
+        mention_count:
+          type: integer
+    IntelligenceFeatureGapDetail:
+      allOf:
+        - $ref: '#/components/schemas/IntelligenceFeatureGap'
+        - type: object
+          properties:
+            affected_customers:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligenceAffectedCustomer'
+            mentions:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligenceMention'
+    IntelligenceCustomer:
+      type: object
+      required: [external_customer_id, customer_name, feature_gap_count, mention_count]
+      properties:
+        external_customer_id:
+          type: string
+        customer_name:
+          type: string
+        latest_revenue:
+          allOf:
+            - $ref: '#/components/schemas/IntelligenceRevenue'
+          nullable: true
+        feature_gap_count:
+          type: integer
+        mention_count:
+          type: integer
+        top_insights:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntelligenceInsight'
+    IntelligenceCustomerDetail:
+      allOf:
+        - $ref: '#/components/schemas/IntelligenceCustomer'
+        - type: object
+          properties:
+            insights:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligenceInsight'
+            mentions:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligenceMention'
+    IntelligenceOverview:
+      type: object
+      required: [total_arr_at_stake, total_mrr_at_stake, feature_gap_count, customer_count, mention_count]
+      properties:
+        total_arr_at_stake:
+          type: number
+          description: Sum of latest ARR across customers with at least one feature-gap mention (counted once per customer)
+        total_mrr_at_stake:
+          type: number
+        feature_gap_count:
+          type: integer
+        customer_count:
+          type: integer
+        mention_count:
+          type: integer
+        source_connectors:
+          type: array
+          items:
+            type: string
+        top_feature_gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntelligenceFeatureGap'
+        top_customers:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntelligenceCustomer'
+        last_mention_at:
+          type: string
+          format: date-time
+          nullable: true
 
 security:
   - bearerAuth: []
@@ -37368,3 +37590,258 @@ paths:
           description: Method Not Allowed (stateless mode does not support SSE streaming)
         '401':
           description: Unauthorized
+
+  # ── Customer Feature Intelligence portal (Python intelligence service, port 8094) ──
+  /intelligence-portal/overview:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Org-level intelligence overview
+      description: Totals, top revenue-weighted feature gaps and top customers for the caller's organization.
+      operationId: getIntelligenceOverview
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: top_n
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 5
+          description: How many top feature gaps and top customers to include
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceOverview'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Missing `intelligence:read` scope
+        '503':
+          description: Intelligence service unavailable
+
+  /intelligence-portal/filters/source-connectors:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: List source connectors with evidence
+      description: Distinct connectors (freshdesk, salesforce, gong, file_upload, ...) that produced at least one mention. Use to populate the `source_connector` filter.
+      operationId: listIntelligenceSourceConnectors
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      responses:
+        '200':
+          description: Connector names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source_connectors:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          description: Unauthorized
+
+  /intelligence-portal/feature-gaps:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Search feature gaps
+      description: Feature gaps ranked by revenue-weighted score, with optional search and filters.
+      operationId: searchIntelligenceFeatureGaps
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 256
+          description: Case-insensitive substring match on feature name
+        - name: min_arr
+          in: query
+          schema:
+            type: number
+            minimum: 0
+          description: Only gaps with at least this much ARR at stake
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+          description: Only gaps with a mention from this connector
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+          description: Only gaps mentioned by this `external_customer_id`
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Page of feature gaps
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntelligenceFeatureGap'
+                  page:
+                    $ref: '#/components/schemas/IntelligencePageMeta'
+        '401':
+          description: Unauthorized
+        '422':
+          description: Invalid filter or pagination parameter
+
+  /intelligence-portal/feature-gaps/{featureName}:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Get one feature gap with evidence
+      description: Score, affected customers ordered by ARR, and citation-carrying mentions (optionally narrowed by customer or connector).
+      operationId: getIntelligenceFeatureGap
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: featureName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+          description: Only mentions from this `external_customer_id`
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+          description: Only mentions from this connector
+      responses:
+        '200':
+          description: Feature gap detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceFeatureGapDetail'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Feature gap not found in the caller's organization
+
+  /intelligence-portal/customers:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Search customers
+      description: Customers ordered by latest ARR, each with its latest revenue snapshot and top insights.
+      operationId: searchIntelligenceCustomers
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 256
+          description: Case-insensitive substring match on customer name or id
+        - name: min_arr
+          in: query
+          schema:
+            type: number
+            minimum: 0
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+          description: Only customers with a mention from this connector
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Page of customers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntelligenceCustomer'
+                  page:
+                    $ref: '#/components/schemas/IntelligencePageMeta'
+        '401':
+          description: Unauthorized
+        '422':
+          description: Invalid filter or pagination parameter
+
+  /intelligence-portal/customers/{externalCustomerId}:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Get one customer with insights and evidence
+      operationId: getIntelligenceCustomer
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: externalCustomerId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+          description: Only mentions from this connector
+      responses:
+        '200':
+          description: Customer detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceCustomerDetail'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Customer not found in the caller's organization

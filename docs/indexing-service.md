@@ -483,9 +483,16 @@ CustomerIntelligenceIngestionService (app/modules/customer_intelligence/ingestio
 MySQL (IIntelligenceStore / IntelligenceStoreFactory — never touched
         directly by feature code, same pattern as IGraphDBProvider/IVectorDBService)
         ▲
-        │  GET /api/v1/intelligence/feature-gaps | /customers  (read side)
+        │  GET /api/v1/intelligence/feature-gaps | /customers  (legacy read side, :8091)
         │
-Future standalone UI/service (not built in this pass)
+        │  IIntelligenceQueryRepository (read-only, MySQLIntelligenceQueryRepository)
+        ▼
+Intelligence Portal service :8094 (app.intelligence_main)
+   GET /api/v1/intelligence-portal/{overview,feature-gaps,customers,filters/source-connectors}
+        ▲
+        │  Node gateway proxy (src/modules/intelligence_portal, scope intelligence:read)
+        │
+Frontend portal  /intelligence  (frontend/app/(main)/intelligence)
 ```
 
 ### 8.3 Adapters shipped in this pass
@@ -512,9 +519,19 @@ in its module docstring and is idempotent (safe to re-run on a schedule).
 - Every table carries `org_id`; every route reads `request.state.user["orgId"]`
   and rejects (403) a client-supplied `org_id` that doesn't match — this is
   the only multi-tenant-ready slice of the fork today.
-- Routes are mounted on this service (port 8091), not proxied through the
-  Node.js gateway — `pipeshub-openapi.yaml` was intentionally not updated.
-  If these routes need public/gateway exposure later, add them there.
+- Intake routes (`POST /api/v1/intelligence/events|revenue-snapshots`) and the
+  legacy read routes stay on this service (port 8091), not proxied.
+- The **portal read API** is a separate process, `app.intelligence_main`
+  (port 8094), so heavy indexing never blocks UI reads. Layering:
+  `IIntelligenceQueryRepository` (read-only contract, MySQL impl under
+  `services/intelligence_store/mysql/mysql_intelligence_query_repository.py`)
+  → `modules/customer_intelligence/queries/{services,mappers}.py`
+  → `api/routes/intelligence_portal/*` (Pydantic wire contract in
+  `api/schemas/intelligence_portal.py`). The Node gateway proxies it at
+  `/api/v1/intelligence-portal/*` (`src/modules/intelligence_portal/`),
+  enforcing the same JWT/PAT/OAuth auth plus the `intelligence:read` scope;
+  it is documented in `pipeshub-openapi.yaml`. The React portal at
+  `/intelligence` consumes only that gateway API.
 - Tests: `backend/python/tests/unit/customer_intelligence/` (scoring formula,
   API auth/org-scoping, all mocked — no MySQL needed) and
   `backend/python/tests/integration/customer_intelligence/` (real MySQL

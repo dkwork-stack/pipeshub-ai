@@ -15,6 +15,7 @@ SERVICES=(
     "Docling Service (Python)|8081|/health"
     "Connectors Service (Python)|8088|/health"
     "Indexing Service (Python)|8091|/health"
+    "Intelligence Portal (Python)|8094|/health"
 )
 
 if [ "${USE_PARSING_SERVICE:-false}" = "true" ]; then

@@ -203,6 +203,7 @@
   },
   "nav": {
     "collections": "Collections",
+    "intelligence": "Feature Intelligence",
     "allRecords": "All Records",
     "workspace": "Workspace",
     "shared": "Shared with me",

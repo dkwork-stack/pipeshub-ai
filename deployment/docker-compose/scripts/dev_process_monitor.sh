@@ -56,6 +56,7 @@ log "Starting remaining Python services..."
 cd /app/python
 watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.indexing_main &
 watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.docling_main &
+watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.intelligence_main &
 
 sleep 10
 

@@ -117,3 +117,107 @@ class FeatureGapScore(BaseModel):
     mention_count: int
     score: float
     top_customers: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Read models — consumed by the intelligence portal service (app.intelligence_main)
+# through IIntelligenceQueryRepository. Kept connector-agnostic like the write
+# models above.
+# ---------------------------------------------------------------------------
+
+
+class FeatureGapFilter(BaseModel):
+    """Filter/search criteria for feature-gap listings."""
+
+    query: Optional[str] = Field(default=None, description="Case-insensitive substring match on feature name")
+    min_arr: Optional[float] = Field(default=None, ge=0, description="Only gaps with at least this much ARR at stake")
+    source_connector: Optional[str] = Field(default=None, description="Only gaps with a mention from this connector")
+    external_customer_id: Optional[str] = Field(default=None, description="Only gaps mentioned by this customer")
+
+
+class CustomerFilter(BaseModel):
+    """Filter/search criteria for customer listings."""
+
+    query: Optional[str] = Field(default=None, description="Case-insensitive substring match on customer name / id")
+    min_arr: Optional[float] = Field(default=None, ge=0, description="Only customers whose latest ARR is at least this")
+    source_connector: Optional[str] = Field(default=None, description="Only customers with a mention from this connector")
+
+
+class MentionFilter(BaseModel):
+    """Narrows the citation list on detail views."""
+
+    external_customer_id: Optional[str] = None
+    source_connector: Optional[str] = None
+
+
+class RevenueSummary(BaseModel):
+    """Latest revenue snapshot for one customer, flattened for read APIs."""
+
+    source_connector: str
+    mrr: float = 0.0
+    arr: float = 0.0
+    seats_used: Optional[int] = None
+    seats_licensed: Optional[int] = None
+    consumed_features: list[str] = Field(default_factory=list)
+    renewal_date: Optional[datetime] = None
+    snapshot_at: datetime
+
+
+class CustomerInsight(BaseModel):
+    """One feature gap as seen from a single customer (aggregated over its mentions)."""
+
+    feature_name: str
+    mention_count: int
+    max_confidence: float
+    last_mentioned_at: datetime
+    source_connectors: list[str] = Field(default_factory=list)
+
+
+class CustomerSummary(BaseModel):
+    """Customer list row: identity + latest revenue + top insights."""
+
+    external_customer_id: str
+    customer_name: str
+    latest_revenue: Optional[RevenueSummary] = None
+    feature_gap_count: int = 0
+    mention_count: int = 0
+    top_insights: list[CustomerInsight] = Field(default_factory=list)
+
+
+class CustomerDetail(CustomerSummary):
+    """Customer detail: everything in the summary plus all insights and citations."""
+
+    insights: list[CustomerInsight] = Field(default_factory=list)
+    mentions: list[FeatureGapMentionRecord] = Field(default_factory=list)
+
+
+class AffectedCustomer(BaseModel):
+    """A customer that mentioned a given feature gap, with its revenue weight."""
+
+    external_customer_id: str
+    customer_name: str
+    arr: float = 0.0
+    mrr: float = 0.0
+    mention_count: int = 0
+
+
+class FeatureGapDetail(BaseModel):
+    """Feature gap detail: score + affected customers + evidence."""
+
+    score: FeatureGapScore
+    affected_customers: list[AffectedCustomer] = Field(default_factory=list)
+    mentions: list[FeatureGapMentionRecord] = Field(default_factory=list)
+
+
+class IntelligenceOverview(BaseModel):
+    """Org-level roll-up shown on the portal landing page."""
+
+    total_arr_at_stake: float = 0.0
+    total_mrr_at_stake: float = 0.0
+    feature_gap_count: int = 0
+    customer_count: int = 0
+    mention_count: int = 0
+    source_connectors: list[str] = Field(default_factory=list)
+    top_feature_gaps: list[FeatureGapScore] = Field(default_factory=list)
+    top_customers: list[CustomerSummary] = Field(default_factory=list)
+    last_mention_at: Optional[datetime] = None

@@ -149,9 +149,11 @@ CONNECTOR_PID=""
 QUERY_PID=""
 PARSING_PID=""
 EXTRACTION_PID=""
+INTELLIGENCE_PID=""
 
 PARSING_PORT=${PARSING_SERVICE_PORT:-8092}
 EXTRACTION_PORT=${EXTRACTION_SERVICE_PORT:-8093}
+INTELLIGENCE_PORT=${INTELLIGENCE_SERVICE_PORT:-8094}
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -325,6 +327,14 @@ start_extraction() {
     fi
 }
 
+start_intelligence() {
+    log "Starting Intelligence Portal service (port ${INTELLIGENCE_PORT})..."
+    cd /app/python
+    INTELLIGENCE_SERVICE_PORT=${INTELLIGENCE_PORT} python -m app.intelligence_main &
+    INTELLIGENCE_PID=$!
+    log "Intelligence Portal service started with PID: $INTELLIGENCE_PID"
+}
+
 check_process() {
     local pid=$1
     local name=$2
@@ -348,6 +358,7 @@ cleanup() {
     [ -n "$QUERY_PID" ] && kill "$QUERY_PID" 2>/dev/null || true
     [ -n "$PARSING_PID" ] && kill "$PARSING_PID" 2>/dev/null || true
     [ -n "$EXTRACTION_PID" ] && kill "$EXTRACTION_PID" 2>/dev/null || true
+    [ -n "$INTELLIGENCE_PID" ] && kill "$INTELLIGENCE_PID" 2>/dev/null || true
     
     wait
     log "All services stopped."
@@ -378,6 +389,9 @@ else
 fi
 
 start_indexing
+# Read-only portal over the MySQL intelligence store. Its own health check
+# covers MySQL, so it is not gated on the other services.
+start_intelligence
 
 
 log "All services started. Beginning monitoring cycle (checking every ${CHECK_INTERVAL}s)..."
@@ -413,6 +427,10 @@ while true; do
         start_query
     fi
 
+    if ! check_process "$INTELLIGENCE_PID" "Intelligence"; then
+        start_intelligence
+    fi
+
     if [ "${USE_PARSING_SERVICE:-false}" = "true" ]; then
         if ! check_process "$PARSING_PID" "Parsing"; then
             start_parsing
@@ -426,6 +444,6 @@ EOF
 
 RUN chmod +x /app/process_monitor.sh
 
-EXPOSE 3000 8002 8092 8093
+EXPOSE 3000 8002 8092 8093 8094
 
 CMD ["/app/process_monitor.sh"]

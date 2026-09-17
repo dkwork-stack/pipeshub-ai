@@ -110,6 +110,7 @@ class DefaultEndpoints(Enum):
     NODEJS_ENDPOINT = "http://127.0.0.1:3000"
     FRONTEND_ENDPOINT = "http://127.0.0.1:3001"
     STORAGE_ENDPOINT = "http://127.0.0.1:3000"  # noqa: PIE796
+    INTELLIGENCE_ENDPOINT = "http://127.0.0.1:8094"
 
 class Routes(Enum):
     """Constants for routes"""

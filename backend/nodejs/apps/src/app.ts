@@ -93,6 +93,8 @@ import { ToolsetsContainer } from './modules/toolsets/container/toolsets.contain
 import { createToolsetsRouter } from './modules/toolsets/routes/toolsets_routes';
 import { SkillsContainer } from './modules/skills/container/skills.container';
 import { createSkillsRouter } from './modules/skills/routes/skills.routes';
+import { IntelligencePortalContainer } from './modules/intelligence_portal/container/intelligence-portal.container';
+import { createIntelligencePortalRouter } from './modules/intelligence_portal/routes/intelligence-portal.routes';
 import { McpServersContainer } from './modules/mcp_servers/container/mcp_servers.container';
 import { createMcpServersRouter } from './modules/mcp_servers/routes/mcp_servers.routes';
 import { createMCPRouter } from './modules/mcp/routes/mcp.routes';
@@ -129,6 +131,7 @@ export class Application {
   private oauthProviderContainer!: Container;
   private toolsetsContainer!: Container;
   private skillsContainer!: Container;
+  private intelligencePortalContainer!: Container;
   private oauthAppsContainer!: Container;
   private mcpServersContainer!: Container;
   private desktopProxySocketGateway: DesktopProxySocketGateway | null = null;
@@ -242,6 +245,10 @@ export class Application {
       );
 
       this.skillsContainer = await SkillsContainer.initialize(
+        configurationManagerConfig,
+      );
+
+      this.intelligencePortalContainer = await IntelligencePortalContainer.initialize(
         configurationManagerConfig,
       );
 
@@ -601,6 +608,13 @@ export class Application {
     this.app.use(
       '/api/v1/skills',
       createSkillsRouter(this.skillsContainer)
+    );
+
+    // Customer Feature Intelligence portal — read-only proxy to the Python
+    // intelligence service (port 8094)
+    this.app.use(
+      '/api/v1/intelligence-portal',
+      createIntelligencePortalRouter(this.intelligencePortalContainer),
     );
 
     // oauth-apps routes — thin proxy to Python connector service

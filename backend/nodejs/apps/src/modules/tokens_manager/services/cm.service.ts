@@ -454,6 +454,28 @@ export class ConfigService {
     );
     return parsedUrl.indexing.endpoint;
   }
+  public async getIntelligenceUrl(): Promise<string> {
+    const url =
+      (await this.keyValueStoreService.get<string>(configPaths.endpoint)) ||
+      '{}';
+
+    let parsedUrl = JSON.parse(url);
+
+    parsedUrl.intelligence = {
+      ...parsedUrl.intelligence,
+      endpoint:
+        normalizeUrl(process.env.INTELLIGENCE_BACKEND!) ||
+        normalizeUrl(parsedUrl.intelligence?.endpoint) ||
+        `http://localhost:8094`,
+    };
+
+    await this.keyValueStoreService.set<string>(
+      configPaths.endpoint,
+      JSON.stringify(parsedUrl),
+    );
+    return parsedUrl.intelligence.endpoint;
+  }
+
   public async getIamBackendUrl(): Promise<string> {
     const url =
       (await this.keyValueStoreService.get<string>(configPaths.endpoint)) ||

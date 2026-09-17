@@ -240,6 +240,20 @@ export const OAuthScopes: Record<string, ScopeDefinition> = {
     requiresUserConsent: true,
   },
 
+  // Customer Feature Intelligence
+  'intelligence:read': {
+    name: 'intelligence:read',
+    description: 'Read customer feature-gap intelligence, revenue impact and evidence',
+    category: 'Intelligence',
+    requiresUserConsent: true,
+  },
+  'intelligence:write': {
+    name: 'intelligence:write',
+    description: 'Submit customer signals and revenue snapshots for intelligence extraction',
+    category: 'Intelligence',
+    requiresUserConsent: true,
+  },
+
   // OpenID Connect standard scopes
   openid: {
     name: 'openid',
