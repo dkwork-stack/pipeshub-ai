@@ -316,6 +316,8 @@ dependencies = [
     # Customer Feature Intelligence MySQL store
     "SQLAlchemy[asyncio]>=2.0.30,<3",
     "aiomysql>=0.2.0,<1",
+    # aiomysql 0.3.x still imports escape_bytes_prefixed, removed in PyMySQL 1.2.1+.
+    "PyMySQL>=1.0,<1.2.1",
     "opensearch-py[async]==3.2.0",
     # Code-file parsing. Versions are pinned rather than floated because the
     # grammar wheels are compiled against a specific tree-sitter ABI and a
