@@ -94,19 +94,22 @@ class ExtractionClient(BaseServiceClient):
         self,
         text: str,
         org_id: str,
+        *,
+        infer_customer: bool = False,
     ) -> "FeatureIntelligenceExtractionResult | None":
         """Call ``POST /api/v1/extract/feature-intelligence``.
 
         Returns evidence-backed pain points / feature gaps for a single
         CustomerSignalEvent's text, or ``None`` on an explicit failure
         response (raises :class:`ExtractionClientError` in that case, mirroring
-        :meth:`classify`).
+        :meth:`classify`). ``infer_customer`` additionally asks the LLM for the
+        customer name, for sources (uploads) that carry none.
         """
         from app.models.intelligence import (  # noqa: PLC0415
             FeatureIntelligenceExtractionResult,
         )
 
-        payload = {"text": text, "org_id": org_id}
+        payload = {"text": text, "org_id": org_id, "infer_customer": infer_customer}
         response = await self._post_json(
             "/api/v1/extract/feature-intelligence",
             payload,

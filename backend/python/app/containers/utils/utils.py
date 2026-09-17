@@ -172,9 +172,39 @@ class ContainerUtils:
         graphdb = GraphDBTransformer(graph_provider, logger)
         return graphdb
 
-    async def create_sink_orchestrator(self, logger: Logger, graphdb: GraphDBTransformer, blob_storage: BlobStorage, vector_store: VectorStore, graph_provider: IGraphDBProvider, config_service) -> SinkOrchestrator:
-        """Async factory for SinkOrchestrator"""
-        orchestrator = SinkOrchestrator(graphdb=graphdb, blob_storage=blob_storage, vector_store=vector_store, graph_provider=graph_provider, logger=logger, config_service=config_service)
+    async def create_sink_orchestrator(
+        self,
+        logger: Logger,
+        graphdb: GraphDBTransformer,
+        blob_storage: BlobStorage,
+        vector_store: VectorStore,
+        graph_provider: IGraphDBProvider,
+        config_service,
+        customer_intelligence_provider=None,
+    ) -> SinkOrchestrator:
+        """Async factory for SinkOrchestrator.
+
+        ``customer_intelligence_provider`` is a DI provider (not a resolved value)
+        so an unreachable MySQL degrades to "uploads are not analysed" instead of
+        blocking indexing startup.
+        """
+        customer_intelligence = None
+        if customer_intelligence_provider is not None:
+            try:
+                customer_intelligence = await customer_intelligence_provider()
+            except Exception as e:
+                logger.warning(
+                    "⚠️ Customer Feature Intelligence unavailable; KB uploads will not be analysed: %s", e
+                )
+        orchestrator = SinkOrchestrator(
+            graphdb=graphdb,
+            blob_storage=blob_storage,
+            vector_store=vector_store,
+            graph_provider=graph_provider,
+            logger=logger,
+            config_service=config_service,
+            customer_intelligence=customer_intelligence,
+        )
         return orchestrator
 
     async def create_document_extractor(self, logger, graph_provider: IGraphDBProvider, config_service) -> DocumentExtraction:

@@ -35,11 +35,19 @@ Rules:
 - If there is no clear pain point or feature gap, return empty lists.
 - Normalize feature_name so the same underlying request from different customers uses the same wording \
 (e.g. always "SSO / SAML support", never a mix of "SAML login" and "single sign-on").
-
+{customer_instruction}
 Text:
 ---
 {text}
 ---
+"""
+
+# Appended only for sources that carry no customer identity of their own
+# (Knowledge Base uploads); tickets/CRM notes already know their customer.
+_CUSTOMER_INSTRUCTION = """
+3. customer_name: the customer/account/company the text is about (e.g. from a "Customer:" or \
+"Account:" field, a signature, or the company named in the text). Return null if the text does not \
+identify one. Never guess; never return the vendor's own name.
 """
 
 # A lightweight pre-tagger: cheap keyword screen so obviously irrelevant text
@@ -64,7 +72,9 @@ class FeatureIntelligenceExtractor:
         self.logger = logger
         self.config_service = config_service
 
-    async def extract(self, text: str, org_id: str) -> FeatureIntelligenceExtractionResult | None:
+    async def extract(
+        self, text: str, org_id: str, *, infer_customer: bool = False
+    ) -> FeatureIntelligenceExtractionResult | None:
         if not text or not text.strip():
             return None
         if not has_extractable_signal(text):
@@ -72,7 +82,10 @@ class FeatureIntelligenceExtractor:
             return FeatureIntelligenceExtractionResult()
 
         llm, _config = await get_llm_for_role(self.config_service, "indexing", reasoning_effort="low")
-        prompt = FEATURE_INTELLIGENCE_PROMPT.format(text=text[:20000])
+        prompt = FEATURE_INTELLIGENCE_PROMPT.format(
+            text=text[:20000],
+            customer_instruction=_CUSTOMER_INSTRUCTION if infer_customer else "",
+        )
         messages = [HumanMessage(content=prompt)]
         try:
             parsed = await invoke_with_structured_output_and_reflection(

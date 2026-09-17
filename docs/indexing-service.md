@@ -460,11 +460,15 @@ rebuilding registry machinery: any adapter is just a thin mapper + HTTP POST.
 ### 8.2 Data flow
 
 ```
-Freshdesk / Salesforce / Chargebee / file upload (scripts/customer_intelligence/*)
-        │  maps source data -> CustomerSignalEvent / CustomerRevenueSnapshot
-        ▼
-POST /api/v1/intelligence/events | /revenue-snapshots   (this service, org-scoped)
-        │
+Freshdesk / Salesforce / Chargebee (scripts/customer_intelligence/*)      Knowledge Base upload (UI)
+        │  maps source data -> CustomerSignalEvent / CustomerRevenueSnapshot        │ normal indexing (§2.2)
+        ▼                                                                          ▼
+POST /api/v1/intelligence/events | /revenue-snapshots   (this service, org-scoped)   SinkOrchestrator.index()
+        │                                                                          │ after indexingStatus=COMPLETED
+        │                                                    ingest_indexed_record ◄┘ (CSV: one event per row,
+        │                                                                             docs: one event; customer
+        │                                                                             inferred by the LLM, file
+        │                                                                             name as fallback)
         ├─ events -> extraction service's FeatureIntelligenceExtractor (LLM,
         │            app/modules/extraction/feature_intelligence_extraction.py)
         │            -> pain points + feature-gap candidates, each with a
@@ -491,9 +495,10 @@ Future standalone UI/service (not built in this pass)
 | Chargebee (MRR/ARR/seats/renewal) | new minimal `ChargebeeClient`/`ChargebeeDataSource` (`app/sources/{client,external}/chargebee/`) | `scripts/customer_intelligence/chargebee_sync.py` |
 | Freshdesk (tickets + conversations) | existing `FreshDeskClient`/`FreshdeskDataSource` | `scripts/customer_intelligence/freshdesk_sync.py` |
 | Salesforce (Cases via SOQL) | existing `SalesforceDataSource.soql_query` | `scripts/customer_intelligence/salesforce_sync.py` |
-| CSV / PDF / document upload | CSV: parsed directly (structured, not a parsing-service job). PDF/docs: reuses the existing KB upload pipeline end-to-end — Node `POST /api/v1/kb/:kbId/upload`, poll `GET /api/v1/kb/record/:recordId`, fetch parsed text via `GET /api/v1/records/{id}/content` — no duplicate parsing logic. | `scripts/customer_intelligence/file_upload.py` |
+| CSV / PDF / document upload (UI) | **In-process, no script.** Any Knowledge Base record becomes intelligence input once it is searchable: `SinkOrchestrator._feed_customer_intelligence` → `CustomerIntelligenceIngestionService.ingest_indexed_record`. Tabular uploads are one event per `TABLE_ROW` block (capped by `INTELLIGENCE_UPLOAD_MAX_ROWS`, `INTELLIGENCE_UPLOAD_CONCURRENCY` parallel LLM calls); other documents are one event. The extractor is asked to infer `customer_name` (`infer_customer=true`); the file name is the fallback so evidence is never dropped. Failure-isolated: a MySQL/LLM error is logged and the record stays indexed. | — |
+| CSV / PDF upload (CLI, legacy) | Same contracts, driven from outside the process for scripted bulk loads. | `scripts/customer_intelligence/file_upload.py` |
 
-All four are standalone scripts, not connectors wired into the registry —
+The three connector adapters are standalone scripts, not connectors wired into the registry —
 run them by hand, via cron, or as a Kubernetes CronJob per adapter. There is
 no scheduler built in this pass; each script documents its required env vars
 in its module docstring and is idempotent (safe to re-run on a schedule).

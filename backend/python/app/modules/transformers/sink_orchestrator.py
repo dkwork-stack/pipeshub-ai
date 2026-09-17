@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class SinkOrchestrator(Transformer):
-    def __init__(self, graphdb: GraphDBTransformer, blob_storage: BlobStorage, vector_store: VectorStore, graph_provider: IGraphDBProvider, logger, config_service: "ConfigurationService") -> None:
+    def __init__(self, graphdb: GraphDBTransformer, blob_storage: BlobStorage, vector_store: VectorStore, graph_provider: IGraphDBProvider, logger, config_service: "ConfigurationService", customer_intelligence=None) -> None:
         super().__init__()
         self.graphdb = graphdb
         self.logger = logging.getLogger(__name__)
@@ -41,6 +41,9 @@ class SinkOrchestrator(Transformer):
         # here: a description generated later would never reach the stored
         # record, and the stored record is what `fetch_record` serves.
         self.image_describer = ImageDescriber(logger, config_service)
+        # Optional: Customer Feature Intelligence (MySQL) for KB uploads. None
+        # when the store is unavailable; indexing never depends on it.
+        self.customer_intelligence = customer_intelligence
 
     # This is not a good long-term solution and should be improved in the future.
     LIMIT_SQL_ROW_BLOCKS_TO = 10
@@ -203,6 +206,27 @@ class SinkOrchestrator(Transformer):
             await self._update_indexing_status(ctx)
             # await self.graphdb.apply(ctx)
             await self._save_reconciliation_metadata(ctx)
+            await self._feed_customer_intelligence(ctx)
+
+    async def _feed_customer_intelligence(self, ctx: TransformContext) -> None:
+        """Push a KB upload into the Customer Feature Intelligence store.
+
+        Runs after the record is searchable and is failure-isolated: a MySQL
+        or LLM outage here must never fail core indexing.
+        """
+        if self.customer_intelligence is None:
+            return
+        record = ctx.record
+        if not self.customer_intelligence.is_upload_record(record):
+            return
+        try:
+            await self.customer_intelligence.ingest_indexed_record(record)
+        except Exception:
+            self.logger.warning(
+                "⚠️ Customer intelligence ingestion failed for upload %s (record remains indexed)",
+                record.id,
+                exc_info=True,
+            )
 
     # A record with a handful of images is cheaper to describe outright than
     # to fetch its previous version for; past this many, the fetch pays for

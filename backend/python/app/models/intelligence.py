@@ -84,6 +84,10 @@ class FeatureIntelligenceExtractionResult(BaseModel):
 
     pain_points: list[PainPoint] = Field(default_factory=list)
     feature_gaps: list[FeatureGapCandidate] = Field(default_factory=list)
+    customer_name: Optional[str] = Field(
+        default=None,
+        description="Customer/account the text is about, inferred only when the caller asked for it (uploads have no customer attached)",
+    )
 
 
 class FeatureGapMentionRecord(BaseModel):

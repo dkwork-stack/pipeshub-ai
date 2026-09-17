@@ -87,39 +87,9 @@ class IndexingAppContainer(BaseAppContainer):
         collection_registry=collection_registry,
     )
 
-    sink_orchestrator = providers.Resource(
-        container_utils.create_sink_orchestrator,
-        logger=logger,
-        graphdb=graphdb,
-        blob_storage=blob_storage,
-        vector_store=vector_store,
-        graph_provider=graph_provider,
-        config_service=config_service,
-    )
-
-
-
-    # Parsers
-    parsers = providers.Resource(
-        container_utils.create_parsers,
-        logger=logger,
-        config_service=config_service,
-    )
-
-    # Processor - depends on indexing_pipeline and graph_provider
-    processor = providers.Resource(
-        container_utils.create_processor,
-        logger=logger,
-        config_service=config_service,
-        indexing_pipeline=indexing_pipeline,
-        graph_provider=graph_provider,
-        parsers=parsers,
-        document_extractor=document_extractor,
-        sink_orchestrator=sink_orchestrator,
-    )
-
     # HTTP clients for the standalone Parsing and Extraction services.
-    # These are only used when USE_PARSING_SERVICE=true is set in the environment.
+    # parsing_client is only used when USE_PARSING_SERVICE=true; extraction_client
+    # is also the LLM hop for Customer Feature Intelligence, so it is always wired.
     parsing_client = providers.Resource(
         container_utils.create_parsing_client,
         config_service=config_service,
@@ -141,6 +111,38 @@ class IndexingAppContainer(BaseAppContainer):
         logger=logger,
         intelligence_store=intelligence_store,
         extraction_client=extraction_client,
+    )
+
+    sink_orchestrator = providers.Resource(
+        container_utils.create_sink_orchestrator,
+        logger=logger,
+        graphdb=graphdb,
+        blob_storage=blob_storage,
+        vector_store=vector_store,
+        graph_provider=graph_provider,
+        config_service=config_service,
+        # The provider, not the value: the factory resolves it lazily so a MySQL
+        # outage degrades to "no intelligence" instead of failing indexing startup.
+        customer_intelligence_provider=customer_intelligence_ingestion_service.provider,
+    )
+
+    # Parsers
+    parsers = providers.Resource(
+        container_utils.create_parsers,
+        logger=logger,
+        config_service=config_service,
+    )
+
+    # Processor - depends on indexing_pipeline and graph_provider
+    processor = providers.Resource(
+        container_utils.create_processor,
+        logger=logger,
+        config_service=config_service,
+        indexing_pipeline=indexing_pipeline,
+        graph_provider=graph_provider,
+        parsers=parsers,
+        document_extractor=document_extractor,
+        sink_orchestrator=sink_orchestrator,
     )
 
     event_processor = providers.Resource(

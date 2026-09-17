@@ -112,6 +112,7 @@ async def classify(request: Request, body: ClassifyRequest) -> JSONResponse:
 class FeatureIntelligenceRequest(BaseModel):
     text: str
     org_id: str
+    infer_customer: bool = False
 
 
 class FeatureIntelligenceResponse(BaseModel):
@@ -138,7 +139,7 @@ async def extract_feature_intelligence(
 
     try:
         result: FeatureIntelligenceExtractionResult | None = await extractor.extract(
-            text=body.text, org_id=body.org_id
+            text=body.text, org_id=body.org_id, infer_customer=body.infer_customer
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
