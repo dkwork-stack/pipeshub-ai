@@ -227,3 +227,9 @@ deployment/docker-compose/bootstrap-first-run.env
 
 # Local scratch workspace, not part of the repo
 loom/
+
+# Root-level npm install leftovers (e.g. `npm install railway` for IaC CLI).
+# Real app deps live under frontend/ and backend/nodejs/apps/.
+/node_modules/
+/package.json
+/package-lock.json
