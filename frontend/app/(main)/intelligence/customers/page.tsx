@@ -83,7 +83,7 @@ export default function CustomersPage() {
                 <Table.Row key={c.external_customer_id}>
                   <Table.RowHeaderCell>
                     <Flex direction="column">
-                      <Link href={`/intelligence/customers/${encodeURIComponent(c.external_customer_id)}`}>
+                      <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
                         <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                           {c.customer_name}
                         </Text>
@@ -108,7 +108,7 @@ export default function CustomersPage() {
                         c.top_insights.map((i) => (
                           <Link
                             key={i.feature_name}
-                            href={`/intelligence/feature-gaps/${encodeURIComponent(i.feature_name)}`}
+                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}
                           >
                             <Badge color="blue" variant="soft" size="1">
                               {i.feature_name} · {i.mention_count}

@@ -76,7 +76,7 @@ export default function IntelligenceOverviewPage() {
                     {data.top_feature_gaps.map((gap) => (
                       <Table.Row key={gap.feature_name}>
                         <Table.RowHeaderCell>
-                          <Link href={`/intelligence/feature-gaps/${encodeURIComponent(gap.feature_name)}`}>
+                          <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
                             <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                               {gap.feature_name}
                             </Text>
@@ -115,7 +115,7 @@ export default function IntelligenceOverviewPage() {
                     {data.top_customers.map((c) => (
                       <Table.Row key={c.external_customer_id}>
                         <Table.RowHeaderCell>
-                          <Link href={`/intelligence/customers/${encodeURIComponent(c.external_customer_id)}`}>
+                          <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
                             <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                               {c.customer_name}
                             </Text>

@@ -1,8 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+/**
+ * Customer detail. Uses `?id=` because `output: 'export'` disallows
+ * dynamic `[id]` segments without a fixed `generateStaticParams` list.
+ *
+ * URL: `/intelligence/customers/detail?id=<external_customer_id>`
+ */
+
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { Badge, Button, Card, Flex, Heading, Select, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useCustomer, useSourceConnectors } from '../../api';
@@ -20,9 +27,9 @@ import {
 
 const ALL = '__all__';
 
-export default function CustomerDetailPage() {
-  const params = useParams<{ id: string }>();
-  const customerId = params?.id ? decodeURIComponent(params.id) : null;
+function CustomerDetailContent() {
+  const searchParams = useSearchParams();
+  const customerId = searchParams.get('id')?.trim() || null;
   const [connector, setConnector] = useState('');
 
   const { data: connectors } = useSourceConnectors();
@@ -31,6 +38,16 @@ export default function CustomerDetailPage() {
   });
 
   const revenue = data?.latest_revenue ?? null;
+
+  if (!customerId) {
+    return (
+      <EmptyState
+        icon="search_off"
+        title="Missing customer id"
+        description="Open a customer from the list to see its detail."
+      />
+    );
+  }
 
   return (
     <Flex direction="column" gap="4">
@@ -41,8 +58,8 @@ export default function CustomerDetailPage() {
       </Button>
 
       <PortalHeader
-        title={data?.customer_name ?? customerId ?? 'Customer'}
-        subtitle={customerId ? `Customer ID: ${customerId}` : undefined}
+        title={data?.customer_name ?? customerId}
+        subtitle={`Customer ID: ${customerId}`}
       />
 
       {isNotFoundError(error) ? (
@@ -103,7 +120,7 @@ export default function CustomerDetailPage() {
                   {data.insights.map((i) => (
                     <Table.Row key={i.feature_name}>
                       <Table.RowHeaderCell>
-                        <Link href={`/intelligence/feature-gaps/${encodeURIComponent(i.feature_name)}`}>
+                        <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}>
                           <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                             {i.feature_name}
                           </Text>
@@ -142,5 +159,13 @@ export default function CustomerDetailPage() {
         </>
       ) : null}
     </Flex>
+  );
+}
+
+export default function CustomerDetailPage() {
+  return (
+    <Suspense fallback={<LoadingRows rows={4} />}>
+      <CustomerDetailContent />
+    </Suspense>
   );
 }

@@ -44,7 +44,7 @@ export function MentionsTable({
           <Table.Row key={`${m.external_customer_id}-${m.feature_name}-${m.external_event_id ?? idx}`}>
             {showFeature ? (
               <Table.Cell>
-                <Link href={`/intelligence/feature-gaps/${encodeURIComponent(m.feature_name)}`}>
+                <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(m.feature_name)}`}>
                   <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                     {m.feature_name}
                   </Text>
@@ -53,7 +53,7 @@ export function MentionsTable({
             ) : null}
             {showCustomer ? (
               <Table.Cell>
-                <Link href={`/intelligence/customers/${encodeURIComponent(m.external_customer_id)}`}>
+                <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(m.external_customer_id)}`}>
                   <Text size="2" style={{ color: 'var(--accent-11)' }}>
                     {m.external_customer_id}
                   </Text>

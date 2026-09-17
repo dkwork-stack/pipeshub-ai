@@ -86,7 +86,7 @@ export default function FeatureGapsPage() {
               {data.items.map((gap) => (
                 <Table.Row key={gap.feature_name}>
                   <Table.RowHeaderCell>
-                    <Link href={`/intelligence/feature-gaps/${encodeURIComponent(gap.feature_name)}`}>
+                    <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
                       <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                         {gap.feature_name}
                       </Text>

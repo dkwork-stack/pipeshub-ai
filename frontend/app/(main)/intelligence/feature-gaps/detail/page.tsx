@@ -1,8 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+/**
+ * Feature-gap detail. Uses `?name=` because `output: 'export'` disallows
+ * dynamic `[name]` segments without a fixed `generateStaticParams` list.
+ *
+ * URL: `/intelligence/feature-gaps/detail?name=<feature>`
+ */
+
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { Button, Card, Flex, Heading, Select, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useFeatureGap, useSourceConnectors } from '../../api';
@@ -12,9 +19,9 @@ import { EmptyState, ErrorState, KpiCard, LoadingRows, PortalHeader, isNotFoundE
 
 const ALL = '__all__';
 
-export default function FeatureGapDetailPage() {
-  const params = useParams<{ name: string }>();
-  const featureName = params?.name ? decodeURIComponent(params.name) : null;
+function FeatureGapDetailContent() {
+  const searchParams = useSearchParams();
+  const featureName = searchParams.get('name')?.trim() || null;
 
   const [customerId, setCustomerId] = useState('');
   const [connector, setConnector] = useState('');
@@ -27,6 +34,16 @@ export default function FeatureGapDetailPage() {
 
   const notFound = isNotFoundError(error);
 
+  if (!featureName) {
+    return (
+      <EmptyState
+        icon="search_off"
+        title="Missing feature name"
+        description="Open a feature gap from the list to see its detail."
+      />
+    );
+  }
+
   return (
     <Flex direction="column" gap="4">
       <Button asChild size="1" variant="ghost" color="gray" style={{ alignSelf: 'flex-start' }}>
@@ -36,7 +53,7 @@ export default function FeatureGapDetailPage() {
       </Button>
 
       <PortalHeader
-        title={featureName ?? 'Feature gap'}
+        title={featureName}
         subtitle="Who is asking for this, how much revenue it represents, and the evidence behind it."
       />
 
@@ -79,7 +96,7 @@ export default function FeatureGapDetailPage() {
                   {data.affected_customers.map((c) => (
                     <Table.Row key={c.external_customer_id}>
                       <Table.RowHeaderCell>
-                        <Link href={`/intelligence/customers/${encodeURIComponent(c.external_customer_id)}`}>
+                        <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
                           <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
                             {c.customer_name}
                           </Text>
@@ -134,5 +151,13 @@ export default function FeatureGapDetailPage() {
         </>
       ) : null}
     </Flex>
+  );
+}
+
+export default function FeatureGapDetailPage() {
+  return (
+    <Suspense fallback={<LoadingRows rows={4} />}>
+      <FeatureGapDetailContent />
+    </Suspense>
   );
 }
