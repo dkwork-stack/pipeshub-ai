@@ -5,7 +5,7 @@ import { Badge, Flex, Link as RadixLink, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { Mention } from '../types';
 import { formatConfidence, formatDate } from './format';
-import { EmptyState } from './primitives';
+import { EmptyState } from './states';
 
 export function MentionsTable({
   mentions,

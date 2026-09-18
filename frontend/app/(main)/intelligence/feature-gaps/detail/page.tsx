@@ -10,12 +10,22 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Button, Card, Flex, Heading, Select, Table, Text } from '@radix-ui/themes';
+import { Button, Flex, Select, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useFeatureGap, useSourceConnectors } from '../../api';
-import { formatCount, formatMoney, formatScore } from '../../components/format';
 import { MentionsTable } from '../../components/mentions-table';
-import { EmptyState, ErrorState, KpiCard, LoadingRows, PortalHeader, isNotFoundError } from '../../components/primitives';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingRows,
+  PortalHero,
+  StatStrip,
+  SurfacePanel,
+  formatCount,
+  formatMoney,
+  formatScore,
+  isNotFoundError,
+} from '../../components';
 
 const ALL = '__all__';
 
@@ -52,7 +62,8 @@ function FeatureGapDetailContent() {
         </Link>
       </Button>
 
-      <PortalHeader
+      <PortalHero
+        eyebrow="Feature gap"
         title={featureName}
         subtitle="Who is asking for this, how much revenue it represents, and the evidence behind it."
       />
@@ -67,18 +78,17 @@ function FeatureGapDetailContent() {
 
       {data ? (
         <>
-          <Flex gap="3" wrap="wrap">
-            <KpiCard icon="payments" label="ARR at stake" value={formatMoney(data.total_arr_at_stake, true)} />
-            <KpiCard icon="calendar_month" label="MRR at stake" value={formatMoney(data.total_mrr_at_stake, true)} />
-            <KpiCard icon="groups" label="Customers" value={formatCount(data.customer_count)} />
-            <KpiCard icon="format_quote" label="Mentions" value={formatCount(data.mention_count)} />
-            <KpiCard icon="leaderboard" label="Priority score" value={formatScore(data.score)} hint="Revenue × demand" />
-          </Flex>
+          <StatStrip
+            items={[
+              { icon: 'payments', label: 'ARR at stake', value: formatMoney(data.total_arr_at_stake, true) },
+              { icon: 'calendar_month', label: 'MRR at stake', value: formatMoney(data.total_mrr_at_stake, true) },
+              { icon: 'groups', label: 'Customers', value: formatCount(data.customer_count) },
+              { icon: 'format_quote', label: 'Mentions', value: formatCount(data.mention_count) },
+              { icon: 'leaderboard', label: 'Priority score', value: formatScore(data.score), hint: 'Revenue × demand' },
+            ]}
+          />
 
-          <Card size="2">
-            <Heading size="3" mb="3">
-              Affected customers
-            </Heading>
+          <SurfacePanel title="Affected customers">
             {data.affected_customers.length === 0 ? (
               <EmptyState icon="groups" title="No customers" />
             ) : (
@@ -97,7 +107,7 @@ function FeatureGapDetailContent() {
                     <Table.Row key={c.external_customer_id}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                          <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
+                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
                             {c.customer_name}
                           </Text>
                         </Link>
@@ -122,11 +132,11 @@ function FeatureGapDetailContent() {
                 </Table.Body>
               </Table.Root>
             )}
-          </Card>
+          </SurfacePanel>
 
-          <Card size="2">
-            <Flex justify="between" align="center" mb="3" gap="3" wrap="wrap">
-              <Heading size="3">Evidence</Heading>
+          <SurfacePanel
+            title="Evidence"
+            action={
               <Flex gap="2" align="center">
                 {customerId ? (
                   <Button size="1" variant="soft" color="gray" onClick={() => setCustomerId('')}>
@@ -145,9 +155,10 @@ function FeatureGapDetailContent() {
                   </Select.Content>
                 </Select.Root>
               </Flex>
-            </Flex>
+            }
+          >
             <MentionsTable mentions={data.mentions} showFeature={false} />
-          </Card>
+          </SurfacePanel>
         </>
       ) : null}
     </Flex>

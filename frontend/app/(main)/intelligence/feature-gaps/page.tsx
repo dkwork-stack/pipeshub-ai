@@ -2,18 +2,21 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Card, Flex, Table, Text } from '@radix-ui/themes';
+import { Flex, Table, Text } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import { useFeatureGaps, useSourceConnectors } from '../api';
-import { formatCount, formatMoney, formatScore } from '../components/format';
 import {
   EmptyState,
   ErrorState,
   FiltersBar,
   LoadingRows,
   PaginationBar,
-  PortalHeader,
-} from '../components/primitives';
+  PortalHero,
+  SurfacePanel,
+  formatCount,
+  formatMoney,
+  formatScore,
+} from '../components';
 
 const PAGE_SIZE = 25;
 
@@ -42,10 +45,11 @@ export default function FeatureGapsPage() {
   };
 
   return (
-    <Flex direction="column" gap="4">
-      <PortalHeader
-        title="Feature Gaps"
-        subtitle="Features customers asked for that the product does not deliver today, ranked by revenue at stake."
+    <Flex direction="column">
+      <PortalHero
+        eyebrow="Demand signal"
+        title="Feature gaps"
+        subtitle="What customers asked for that the product does not deliver today, ranked by revenue at stake."
       />
 
       <FiltersBar
@@ -59,7 +63,7 @@ export default function FeatureGapsPage() {
         searchPlaceholder="Search feature name…"
       />
 
-      <Card size="2">
+      <SurfacePanel>
         {error ? <ErrorState error={error} onRetry={() => void mutate()} /> : null}
         {isLoading && !data ? <LoadingRows rows={8} /> : null}
         {data && data.items.length === 0 ? (
@@ -87,7 +91,7 @@ export default function FeatureGapsPage() {
                 <Table.Row key={gap.feature_name}>
                   <Table.RowHeaderCell>
                     <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
-                      <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
+                      <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
                         {gap.feature_name}
                       </Text>
                     </Link>
@@ -107,7 +111,7 @@ export default function FeatureGapsPage() {
             </Table.Body>
           </Table.Root>
         ) : null}
-      </Card>
+      </SurfacePanel>
 
       <PaginationBar page={data?.page} onOffsetChange={setOffset} />
     </Flex>

@@ -2,18 +2,21 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Badge, Card, Flex, Table, Text } from '@radix-ui/themes';
+import { Badge, Flex, Table, Text } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import { useCustomers, useSourceConnectors } from '../api';
-import { formatCount, formatDate, formatMoney } from '../components/format';
 import {
   EmptyState,
   ErrorState,
   FiltersBar,
   LoadingRows,
   PaginationBar,
-  PortalHeader,
-} from '../components/primitives';
+  PortalHero,
+  SurfacePanel,
+  formatCount,
+  formatDate,
+  formatMoney,
+} from '../components';
 
 const PAGE_SIZE = 25;
 
@@ -42,8 +45,9 @@ export default function CustomersPage() {
   };
 
   return (
-    <Flex direction="column" gap="4">
-      <PortalHeader
+    <Flex direction="column">
+      <PortalHero
+        eyebrow="Accounts"
         title="Customers"
         subtitle="Accounts with recorded feature demand, joined with their latest subscription snapshot."
       />
@@ -59,7 +63,7 @@ export default function CustomersPage() {
         searchPlaceholder="Search customer name or ID…"
       />
 
-      <Card size="2">
+      <SurfacePanel>
         {error ? <ErrorState error={error} onRetry={() => void mutate()} /> : null}
         {isLoading && !data ? <LoadingRows rows={8} /> : null}
         {data && data.items.length === 0 ? (
@@ -84,7 +88,7 @@ export default function CustomersPage() {
                   <Table.RowHeaderCell>
                     <Flex direction="column">
                       <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                        <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
+                        <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
                           {c.customer_name}
                         </Text>
                       </Link>
@@ -110,7 +114,7 @@ export default function CustomersPage() {
                             key={i.feature_name}
                             href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}
                           >
-                            <Badge color="blue" variant="soft" size="1">
+                            <Badge color="teal" variant="soft" size="1">
                               {i.feature_name} · {i.mention_count}
                             </Badge>
                           </Link>
@@ -123,7 +127,7 @@ export default function CustomersPage() {
             </Table.Body>
           </Table.Root>
         ) : null}
-      </Card>
+      </SurfacePanel>
 
       <PaginationBar page={data?.page} onOffsetChange={setOffset} />
     </Flex>
