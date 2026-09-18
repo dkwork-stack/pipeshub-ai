@@ -30,12 +30,16 @@ class _FakeStore:
     def __init__(self) -> None:
         self.customers: list[tuple[str, str, str]] = []
         self.mentions = []
+        self.recompute_calls: list[tuple[str, list[str] | None]] = []
 
     async def upsert_customer(self, org_id, external_customer_id, customer_name) -> None:
         self.customers.append((org_id, external_customer_id, customer_name))
 
     async def upsert_feature_gap_mention(self, mention) -> None:
         self.mentions.append(mention)
+
+    async def recompute_feature_gap_scores(self, org_id, feature_names=None) -> None:
+        self.recompute_calls.append((org_id, feature_names))
 
 
 class _FakeExtractionClient:
@@ -176,3 +180,38 @@ async def test_row_cap_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     await svc.ingest_indexed_record(_record([_row(i, f"row {i} need x", i + 2) for i in range(5)]))
 
     assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_one_unit_failure_does_not_drop_sibling_writes() -> None:
+    """A single row's store error must not abort the rest of the CSV batch."""
+    ok = "Customer: Acme. Need SSO."
+    boom = "Customer: Globex. Need audit log."
+
+    class _BoomStore(_FakeStore):
+        async def upsert_customer(self, org_id, external_customer_id, customer_name) -> None:
+            if "globex" in external_customer_id:
+                raise RuntimeError("simulated mysql loop error")
+            await super().upsert_customer(org_id, external_customer_id, customer_name)
+
+    client = _FakeExtractionClient(
+        {
+            ok: FeatureIntelligenceExtractionResult(
+                feature_gaps=[_gap("SSO")], customer_name="Acme"
+            ),
+            boom: FeatureIntelligenceExtractionResult(
+                feature_gaps=[_gap("Audit log")], customer_name="Globex"
+            ),
+        }
+    )
+    store = _BoomStore()
+    svc = CustomerIntelligenceIngestionService(
+        logger=logging.getLogger("test"), intelligence_store=store, extraction_client=client
+    )
+
+    written = await svc.ingest_indexed_record(_record([_row(0, ok, 2), _row(1, boom, 3)]))
+
+    assert written == 1
+    assert len(store.mentions) == 1
+    assert store.mentions[0].feature_name == "SSO"
+    assert store.recompute_calls == [(ORG_ID, None)]

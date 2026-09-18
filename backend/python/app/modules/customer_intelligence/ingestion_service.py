@@ -121,12 +121,47 @@ class CustomerIntelligenceIngestionService:
             async with semaphore:
                 return await self._ingest_upload_unit(record, event_id, text)
 
-        written = await asyncio.gather(*(_one(eid, text) for eid, text in units))
-        total = sum(written)
-        self.logger.info(
-            "✅ Upload '%s': %d unit(s) analysed, %d feature-gap mention(s) written",
-            record.record_name, len(units), total,
+        # return_exceptions: one row's MySQL/LLM failure must not abort the
+        # rest of the CSV (and must not surface as a single sink-level throw
+        # that looks like the whole upload produced nothing).
+        results = await asyncio.gather(
+            *(_one(eid, text) for eid, text in units),
+            return_exceptions=True,
         )
+        total = 0
+        failures = 0
+        for result in results:
+            if isinstance(result, BaseException):
+                failures += 1
+                self.logger.warning(
+                    "Upload unit failed for '%s': %s",
+                    record.record_name,
+                    result,
+                    exc_info=result,
+                )
+            else:
+                total += result
+
+        # Scores are recomputed per mention; a mid-batch failure can leave the
+        # org's score rows incomplete. One org-wide pass heals that cheaply.
+        if total > 0:
+            try:
+                await self.intelligence_store.recompute_feature_gap_scores(record.org_id)
+            except Exception:
+                self.logger.warning(
+                    "Post-upload score recompute failed for org %s",
+                    record.org_id,
+                    exc_info=True,
+                )
+
+        self.logger.info(
+            "✅ Upload '%s': %d unit(s) analysed, %d feature-gap mention(s) written (%d unit failure(s))",
+            record.record_name, len(units), total, failures,
+        )
+        if failures and total == 0:
+            raise RuntimeError(
+                f"Customer intelligence ingestion failed for all {failures} unit(s) of '{record.record_name}'"
+            )
         return total
 
     def _text_units(self, record: "Record") -> list[tuple[str, str]]:

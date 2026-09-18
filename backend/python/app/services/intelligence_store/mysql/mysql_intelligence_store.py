@@ -7,9 +7,11 @@ thin, replaceable adapter, not a place for business logic (that lives in
 """
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import datetime
 from logging import Logger
-from typing import Optional
+from typing import Dict, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -40,33 +42,66 @@ class MySQLIntelligenceStore(IIntelligenceStore):
         self.dsn = dsn
         self.pool_size = pool_size
         self.max_overflow = max_overflow
-        self._engine: Optional[AsyncEngine] = None
+        # aiomysql / SQLAlchemy async pools bind to the loop that created them.
+        # Indexing creates the store on the uvicorn loop, then runs ingestion on
+        # the consumer worker-thread loop — one shared engine raises
+        # "Future attached to a different loop". Mirror QdrantService: one
+        # engine per running loop, created lazily after connect().
+        self._engines: Dict[asyncio.AbstractEventLoop, AsyncEngine] = {}
+        self._engines_lock = threading.Lock()
+        self._connected = False
+
+    def _create_engine(self) -> AsyncEngine:
+        return create_async_engine(
+            self.dsn,
+            pool_size=self.pool_size,
+            max_overflow=self.max_overflow,
+            pool_pre_ping=True,
+        )
+
+    def _engine_for_current_loop(self) -> AsyncEngine:
+        if not self._connected:
+            raise RuntimeError("MySQLIntelligenceStore.connect() must be called before use")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "MySQLIntelligenceStore requires a running event loop"
+            ) from exc
+        with self._engines_lock:
+            engine = self._engines.get(loop)
+            if engine is None:
+                engine = self._create_engine()
+                self._engines[loop] = engine
+            return engine
 
     async def connect(self) -> bool:
         try:
-            self._engine = create_async_engine(
-                self.dsn,
-                pool_size=self.pool_size,
-                max_overflow=self.max_overflow,
-                pool_pre_ping=True,
-            )
-            async with self._engine.begin() as conn:
+            self._connected = True
+            engine = self._engine_for_current_loop()
+            async with engine.begin() as conn:
                 await conn.run_sync(metadata.create_all)
             self.logger.info("✅ MySQLIntelligenceStore connected and schema ensured")
             return True
         except Exception as e:
+            self._connected = False
             self.logger.error(f"❌ MySQLIntelligenceStore failed to connect: {e}")
             return False
 
     async def close(self) -> None:
-        if self._engine is not None:
-            await self._engine.dispose()
+        with self._engines_lock:
+            engines = list(self._engines.values())
+            self._engines.clear()
+            self._connected = False
+        for engine in engines:
+            try:
+                await engine.dispose()
+            except Exception as exc:
+                self.logger.debug("Error disposing MySQL engine: %s", exc)
 
     @property
     def engine(self) -> AsyncEngine:
-        if self._engine is None:
-            raise RuntimeError("MySQLIntelligenceStore.connect() must be called before use")
-        return self._engine
+        return self._engine_for_current_loop()
 
     async def upsert_customer(
         self, org_id: str, external_customer_id: str, customer_name: str
