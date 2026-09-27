@@ -23,12 +23,12 @@ from fastapi.responses import StreamingResponse
 # Base connector and service imports
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.arangodb import (
+    PermissionModel,
     Connectors,
     MimeTypes,
     OriginTypes,
     ProgressStatus,
 )
-from app.config.constants.http_status_code import HttpStatusCode
 from app.connectors.core.base.connector.connector_service import BaseConnector
 from app.connectors.core.base.data_processor.data_source_entities_processor import (
     DataSourceEntitiesProcessor,
@@ -81,6 +81,13 @@ from app.sources.client.dropbox.dropbox_ import (
     DropboxTokenConfig,
 )
 from app.sources.external.dropbox.dropbox_ import DropboxDataSource
+from app.connectors.core.base.error.stream_errors import (
+    connector_not_ready,
+    not_downloadable,
+    not_found_at_source,
+    raise_for_stream_fetch,
+    to_stream_error,
+)
 from app.utils.streaming import create_stream_record_response, stream_content
 
 
@@ -159,6 +166,7 @@ def get_mimetype_enum_for_dropbox(entry: Union[FileMetadata, FolderMetadata]) ->
     .with_description("Sync files and folders from Dropbox Personal account")\
     .with_categories(["Storage"])\
     .with_scopes([ConnectorScope.PERSONAL.value])\
+    .with_permission_model(PermissionModel.APP_LEVEL)\
     .with_auth([
         AuthBuilder.type(AuthType.OAUTH).oauth(
             connector_name="Dropbox Personal",
@@ -966,9 +974,12 @@ class DropboxIndividualConnector(BaseConnector):
         """Handle different types of record updates (new, updated, deleted)."""
         try:
             if record_update.is_deleted:
-                await self.data_entities_processor.on_record_deleted(
-                    record_id=record_update.external_record_id
+                # The update carries the source's id; records are deleted by their key.
+                existing_record = await self.data_entities_processor.get_record_by_external_id(
+                    self.connector_id, record_update.external_record_id
                 )
+                if existing_record:
+                    await self.data_entities_processor.on_record_deleted(record_id=existing_record.id)
             elif record_update.is_new:
                 self.logger.info(f"New record detected: {record_update.record.record_name}")
             elif record_update.is_updated:
@@ -1075,7 +1086,7 @@ class DropboxIndividualConnector(BaseConnector):
         Simplified for individual accounts.
         """
         if not self.data_source:
-            return None
+            raise connector_not_ready(self.display_name)
         try:
             # Dropbox uses path or file ID for temporary links. ID is more robust.
             target_identifier = record.external_record_id
@@ -1084,21 +1095,44 @@ class DropboxIndividualConnector(BaseConnector):
                 target_identifier = getattr(record, 'path', None)
             if not target_identifier:
                 self.logger.warning(f"Cannot generate signed URL: Record {record.id} missing external_id")
-                return None
-            response = await self.data_source.files_get_temporary_link(path=target_identifier)
-
+                raise not_downloadable(
+                    "This item is missing its Dropbox path and cannot be downloaded.",
+                    connector=self.display_name,
+                )
+            response = await self.data_source.files_get_temporary_link(
+                path=target_identifier, raise_on_error=True
+            )
+            if not response.success or not response.data:
+                self.logger.error(
+                    f"Failed to get temporary link for record {record.id}: {response.error}"
+                )
+            raise_for_stream_fetch(
+                success=response.success,
+                has_payload=bool(response.data),
+                connector=self.display_name,
+                message=response.error,
+            )
             return response.data.link
+        except HTTPException:
+            raise
         except Exception as e:
-            self.logger.error(f"Error creating signed URL for record {record.id}: {e}")
-            return None
+            self.logger.error(
+                f"Error creating signed URL for record {record.id}: {e}", exc_info=True
+            )
+            raise to_stream_error(e, connector=self.display_name) from e
 
     async def stream_record(self, record: Record) -> StreamingResponse:
         signed_url = await self.get_signed_url(record)
         if not signed_url:
-            raise HTTPException(status_code=HttpStatusCode.NOT_FOUND.value, detail="File not found or access denied")
+            raise not_found_at_source(self.display_name)
 
         return create_stream_record_response(
-            stream_content(signed_url),
+            stream_content(
+                signed_url,
+                record_id=record.id,
+                file_name=record.record_name,
+                connector=self.display_name,
+            ),
             filename=record.record_name,
             mime_type=record.mime_type,
             fallback_filename=f"record_{record.id}"

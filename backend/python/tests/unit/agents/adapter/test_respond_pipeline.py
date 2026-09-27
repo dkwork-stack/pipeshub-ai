@@ -7,6 +7,7 @@ completion_data shape and the empty-answer / agent-failure fallback paths."""
 
 from __future__ import annotations
 
+from app.agents.agent_loop.error_classification import _USER_MESSAGES
 from app.agents.agent_loop.hooks.citations import CitationCollector
 from app.agents.agent_loop.respond import AnswerFinalizer
 from tests.unit.agents.adapter.conftest import make_context
@@ -29,7 +30,7 @@ class TestErrorPath:
 
         result = await finalizer.run(agent_success=False, agent_error="tool exploded", event_sink=sink)
 
-        assert result["answer"] == "I encountered an issue while processing your request. Please try again."
+        assert result["answer"] == _USER_MESSAGES["unknown"]
         assert result["answerMatchType"] == "Error"
         assert result["errorCode"] == "unknown"
         event_types = [e["event"] for e in sink.events]
@@ -44,7 +45,7 @@ class TestErrorPath:
         result = await finalizer.run(agent_success=False, agent_error=None, event_sink=sink)
 
         assert result["errorCode"] == "unknown"
-        assert result["answer"] == "I encountered an issue while processing your request. Please try again."
+        assert result["answer"] == _USER_MESSAGES["unknown"]
 
     async def test_agent_failure_classifies_rate_limit_error(self) -> None:
         """LLM 429s (see `error_classification.py`) must surface as a
@@ -62,7 +63,7 @@ class TestErrorPath:
         )
 
         assert result["errorCode"] == "rate_limit"
-        assert result["answer"] == "The AI service is currently rate limited. Please try again in a moment."
+        assert result["answer"] == _USER_MESSAGES["rate_limit"]
 
     async def test_agent_failure_surfaces_invalid_request_provider_message(self) -> None:
         context = make_context()
@@ -81,7 +82,7 @@ class TestErrorPath:
 
         assert result["errorCode"] == "invalid_request"
         assert result["answer"] == (
-            "The AI service rejected this request: invalid Qwen3.8 reasoning_effort"
+            "The AI model rejected this request: invalid Qwen3.8 reasoning_effort"
         )
 
 
@@ -149,6 +150,23 @@ class TestSuccessPath:
         event_types = [e["event"] for e in sink.events]
         assert event_types == ["answer_chunk", "complete"]
 
+    async def test_empty_answer_still_counts_as_an_answer_in_telemetry(self) -> None:
+        """The user received something, sourceless. Leaving the fallback out
+        would make the answers-with-sources ratio look better than it is."""
+        from app.telemetry.event_buffer import event_buffer
+
+        event_buffer.drain()
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+
+        await finalizer.run(
+            agent_success=True, agent_error=None, agent_output="", event_sink=_RecordingSink(),
+        )
+
+        recorded = [e for e in event_buffer.drain() if e["event"] == "answer_generated"]
+        assert len(recorded) == 1
+        assert recorded[0]["props"]["citation_count"] == 0
+
     async def test_confidence_trailer_only_answer_falls_back_to_default_response(self) -> None:
         """The model's whole answer is the confidence trailer it was told to
         append — non-empty raw, but nothing survives the strip. Node rejects an
@@ -202,7 +220,7 @@ class TestSuccessPath:
         )
 
         assert result["answerMatchType"] == "Error"
-        assert result["answer"] == "I encountered an issue while processing your request. Please try again."
+        assert result["answer"] == _USER_MESSAGES["unknown"]
 
     async def test_citations_and_confidence_normalized_from_agent_output(self) -> None:
         context = make_context()
@@ -309,3 +327,117 @@ class TestAskUserQuestionFallback:
         )
 
         assert not [e for e in sink.events if e["event"] == "ask_user_question"]
+
+
+class TestCancelledPath:
+    """`agent_cancelled=True` (Stop Generation, Phase 3b) — must persist
+    whatever text was already streamed as a first-class `status: "stopped"`
+    answer, never the generic error/apology text `_emit_error_response`/
+    `_run_success_path`'s empty-answer fallback would otherwise produce."""
+
+    async def test_cancelled_with_partial_text_persists_it_with_stopped_status(self) -> None:
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+        sink = _RecordingSink()
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=sink, streamed_answer="Here is the partial answer",
+            agent_cancelled=True,
+        )
+
+        assert result["status"] == "stopped"
+        assert result["answer"] == "Here is the partial answer"
+        assert result["citations"] == []
+        assert context.tool_state["completion_data"] == result
+        event_types = [e["event"] for e in sink.events]
+        assert event_types == ["answer_chunk", "complete"]
+        assert sink.events[0]["data"]["accumulated"] == "Here is the partial answer"
+
+    async def test_cancelled_before_any_text_streamed_persists_an_empty_answer_not_a_fallback(
+        self,
+    ) -> None:
+        """Cancelled during "Thinking", before the first token — this must
+        NOT fall through to `_EMPTY_ANSWER_FALLBACK`'s apologetic text (the
+        branch an empty `agent_output` takes on the success path): Node's
+        save path already treats an empty answer as valid exactly when
+        `status == "stopped"` (see `_run_cancelled_path`'s docstring)."""
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+        sink = _RecordingSink()
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=sink, streamed_answer="",
+            agent_cancelled=True,
+        )
+
+        assert result["status"] == "stopped"
+        assert result["answer"] == ""
+
+    async def test_stopped_answer_with_text_counts_as_a_stopped_answer_in_telemetry(self) -> None:
+        from app.telemetry.event_buffer import event_buffer
+
+        event_buffer.drain()
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=_RecordingSink(), streamed_answer="Here is the partial answer",
+            agent_cancelled=True,
+        )
+
+        recorded = [e for e in event_buffer.drain() if e["event"] == "answer_generated"]
+        assert len(recorded) == 1
+        assert recorded[0]["props"]["stopped"] is True
+        assert recorded[0]["props"]["citation_count"] == len(result["citations"])
+
+    async def test_stop_before_any_text_is_not_counted_as_an_answer(self) -> None:
+        from app.telemetry.event_buffer import event_buffer
+
+        event_buffer.drain()
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+
+        await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=_RecordingSink(), streamed_answer="",
+            agent_cancelled=True,
+        )
+
+        assert [e for e in event_buffer.drain() if e["event"] == "answer_generated"] == []
+
+    async def test_agent_cancelled_takes_precedence_over_agent_success_false(self) -> None:
+        """`Agent.fail(..., status="cancelled")` sets `success=False` with a
+        generic `error="Cancelled"` — indistinguishable from a real failure
+        by those two fields alone. `agent_cancelled` must still route to the
+        cancelled branch, never `_emit_error_response`'s generic error text."""
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+        sink = _RecordingSink()
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=sink, streamed_answer="partial",
+            agent_cancelled=True,
+        )
+
+        assert result["status"] == "stopped"
+        assert "errorCode" not in result
+        assert result["answer"] == "partial"
+
+    async def test_reasoning_turns_are_still_attached_when_cancelled(self) -> None:
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+        sink = _RecordingSink()
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=sink, streamed_answer="partial",
+            reasoning_turns=[{"turn": 1, "content": "thinking..."}],
+            agent_cancelled=True,
+        )
+
+        assert result["status"] == "stopped"
+        assert "reasoning" in result

@@ -52,6 +52,10 @@ from app.config.constants.arangodb import (
     get_mime_type_for_extension,
 )
 from app.config.constants.http_status_code import HttpStatusCode
+from app.connectors.core.base.error.stream_errors import (
+    not_downloadable,
+    raise_for_stream_fetch,
+)
 from app.connectors.core.base.sync_point.sync_point import generate_record_sync_point_key
 from app.connectors.core.registry.filters import IndexingFilterKey
 from app.models.entities import CodeFileRecord, FileRecord, Record, RecordGroupType, RecordType
@@ -417,34 +421,26 @@ class ReposSync:
         c = self.c
         repo_id = int(external_group_id.split("-")[0])
         by_path: dict[str, str] = {}
-        async with c.data_store_provider.transaction() as tx_store:
-            rg = await tx_store.get_record_group_by_external_id(
-                connector_id=c.connector_id, external_id=external_group_id,
+        page_size = 500
+        after_key: str | None = None
+        while True:
+            page = await c.data_entities_processor.get_records_in_record_group(
+                connector_id=c.connector_id,
+                external_group_id=external_group_id,
+                limit=page_size,
+                after_key=after_key,
             )
-            if not rg:
-                return by_path
-            offset = 0
-            page_size = 500
-            while True:
-                page = await tx_store.get_records_by_status(
-                    org_id=c.data_entities_processor.org_id,
-                    connector_id=c.connector_id,
-                    status_filters=None,
-                    limit=page_size,
-                    offset=offset,
-                    record_group_id=rg.id,
+            if not page:
+                break
+            for rec in page:
+                path = getattr(rec, "file_path", None) or path_from_external_id(
+                    repo_id, getattr(rec, "external_record_id", None) or ""
                 )
-                if not page:
-                    break
-                for rec in page:
-                    path = getattr(rec, "file_path", None) or path_from_external_id(
-                        repo_id, getattr(rec, "external_record_id", None) or ""
-                    )
-                    if path:
-                        by_path[path] = rec.id
-                if len(page) < page_size:
-                    break
-                offset += page_size
+                if path:
+                    by_path[path] = rec.id
+            if len(page) < page_size:
+                break
+            after_key = page[-1].id
         return by_path
 
     # ------------------------------------------------------------------
@@ -833,22 +829,40 @@ class ReposSync:
         c = self.c
         external_group_id = getattr(record, "external_record_group_id", None)
         if not external_group_id:
-            raise Exception(f"Repository id not found on record {record.id}")
+            raise HTTPException(
+                HttpStatusCode.BAD_REQUEST.value,
+                f"Repository id not found on record {record.id}",
+            )
         repo_id = int(external_group_id.split("-")[0])
         file_path = record.file_path
         if not file_path:
-            raise Exception(f"Cannot resolve repo path for record {record.id}")
+            raise HTTPException(
+                HttpStatusCode.BAD_REQUEST.value,
+                f"Cannot resolve repo path for record {record.id}",
+            )
 
         repo_res = await c.runtime.ds_call(c.data_source.get_repo_by_id, repo_id)
         if not repo_res.success or not repo_res.data:
-            raise Exception(f"Failed to resolve repo id={repo_id} for record {record.id}: {repo_res.error}")
+            raise_for_stream_fetch(
+                success=repo_res.success,
+                has_payload=bool(repo_res.data),
+                connector=c.display_name,
+                status=repo_res.status_code,
+                message=repo_res.error,
+            )
         repo = repo_res.data
 
         content_res = await c.runtime.ds_call(
             c.data_source.get_file_contents, repo.owner.login, repo.name, file_path, repo.default_branch,
         )
         if not content_res.success or content_res.data is None:
-            raise Exception(f"Failed to fetch content for {file_path} in {repo.full_name}: {content_res.error}")
+            raise_for_stream_fetch(
+                success=content_res.success,
+                has_payload=content_res.data is not None,
+                connector=c.display_name,
+                status=content_res.status_code,
+                message=content_res.error,
+            )
         content_file = content_res.data
         # Incrementally-added/modified files bypass the full-sync size stamp
         # (Compare Commits entries carry no blob size), so this is the only
@@ -892,18 +906,26 @@ class ReposSync:
         c = self.c
         blob_sha = getattr(record, "file_hash", None)
         if not blob_sha:
-            raise Exception(
+            raise not_downloadable(
                 f"Contents API returned no content for {file_path!r} ({blob_size} bytes) in "
-                f"{repo.full_name} and the record carries no blob sha to fall back on"
+                f"{repo.full_name} and the record carries no blob sha to fall back on",
+                connector=c.display_name,
             )
         blob_res = await c.runtime.ds_call(c.data_source.get_git_blob, repo.owner.login, repo.name, blob_sha)
         if not blob_res.success or blob_res.data is None:
-            raise Exception(
-                f"Failed to fetch blob {blob_sha} for {file_path!r} in {repo.full_name}: {blob_res.error}"
+            raise_for_stream_fetch(
+                success=blob_res.success,
+                has_payload=blob_res.data is not None,
+                connector=c.display_name,
+                status=blob_res.status_code,
+                message=blob_res.error,
             )
         blob_content = getattr(blob_res.data, "content", None)
         if not blob_content:
-            raise Exception(f"Blob {blob_sha} for {file_path!r} in {repo.full_name} returned no content")
+            raise not_downloadable(
+                f"Blob {blob_sha} for {file_path!r} in {repo.full_name} returned no content",
+                connector=c.display_name,
+            )
         if getattr(blob_res.data, "encoding", "base64") != "base64":
             return blob_content.encode(GitHubLiterals.UTF_8.value)
         return base64.b64decode(blob_content)

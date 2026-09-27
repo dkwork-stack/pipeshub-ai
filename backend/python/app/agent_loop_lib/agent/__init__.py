@@ -29,7 +29,7 @@ from app.agent_loop_lib.core.messages import (
     ToolMessage,
     UserMessage,
 )
-from app.agent_loop_lib.core.responses import RunUsage
+from app.agent_loop_lib.core.responses import RunUsage, StopReason
 from app.agent_loop_lib.core.scope import RunScope, TurnScope
 from app.agent_loop_lib.core.streaming import (
     StreamCompleteEvent,
@@ -129,7 +129,10 @@ class Agent:
     loops (see `examples/`) be added with zero changes to this file.
     """
 
-    def __init__(self, spec: "AgentSpec", runtime: "AgentRuntime", *, session_id: str | None = None) -> None:
+    def __init__(
+        self, spec: "AgentSpec", runtime: "AgentRuntime", *,
+        session_id: str | None = None, run_id: str | None = None,
+    ) -> None:
         self._spec = spec
         self._runtime = runtime
         self._session_id = session_id
@@ -182,7 +185,14 @@ class Agent:
         for install in spec.middleware:
             install(self._hooks)
 
-        self._run_ctx = RunContext(role_name=spec.name, model=spec.model.model)
+        # `run_id`, when given (a caller-supplied id — e.g. an AG-UI client's
+        # `runId` — that must match every frame this run emits), overrides
+        # `RunContext.run_id`'s own `default_factory` uuid4 rather than
+        # generating one and mapping between the two afterward.
+        self._run_ctx = RunContext(
+            role_name=spec.name, model=spec.model.model,
+            **({"run_id": run_id} if run_id else {}),
+        )
 
         # Run-scoped conversation state — created fresh in run() unless a
         # caller (AgentRuntime.run_child, resume()) pre-seeds it.
@@ -389,9 +399,27 @@ class Agent:
         else:
             self._scope.extra_prompt_sections.pop(name, None)
 
+    def _cut_off_reply_parts(self) -> list[str]:
+        """Texts of the text-only replies cut off at the output-token limit
+        that end this run's turns so far, oldest first. The model was asked
+        to continue each one, so they and the next reply form one answer."""
+        turns = self._scope.turns if self._scope is not None else []
+        parts: list[str] = []
+        for turn in reversed(turns):
+            msg = turn.messages[-1] if turn.messages else None
+            if turn.tool_calls or not isinstance(msg, AssistantMessage) or not msg.truncated:
+                break
+            parts.append(msg.text)
+        parts.reverse()
+        return parts
+
     def last_assistant_text(self) -> str:
         """Text of the most recent assistant message across this run's
-        turns so far, or "" if none."""
+        turns so far, or "" if none. A reply cut off at the output-token
+        limit is returned whole, joined with its continuations."""
+        cut_off = "".join(self._cut_off_reply_parts())
+        if cut_off:
+            return cut_off
         turns = self._scope.turns if self._scope is not None else []
         for turn in reversed(turns):
             for msg in reversed(turn.messages):
@@ -476,7 +504,10 @@ class Agent:
         every "run stopped without succeeding" exit (blocked hooks,
         cancellation, transport errors, max_turns exhausted)."""
         turns = self._scope.turns if self._scope is not None else []
-        result = AgentResult(goal=goal, turns=list(turns), success=False, error=error, usage=self._usage)
+        result = AgentResult(
+            goal=goal, turns=list(turns), success=False, error=error, usage=self._usage,
+            cancelled=(status == "cancelled"),
+        )
         await self.emit(
             EventType.CANCELLATION if status == "cancelled" else EventType.ERROR,
             {"error": error},
@@ -656,6 +687,8 @@ class Agent:
             )
             system_blocks = [_stable, _volatile]
 
+        cut_off_parts = self._cut_off_reply_parts()
+
         llm_kwargs: dict = {}
         if spec.model.thinking_budget is not None:
             llm_kwargs["thinking_budget"] = spec.model.thinking_budget
@@ -674,7 +707,12 @@ class Agent:
             # --- Streaming branch: consume the StreamEvent stream, firing
             # per-token AG-UI events for text deltas, terminating on exactly
             # one StreamCompleteEvent carrying the full ModelResponse.
-            await self.emit(EventType.TEXT_MESSAGE_START, {"turn_index": turn_index})
+            text_start: dict = {"turn_index": turn_index}
+            if cut_off_parts:
+                # Tentative: lets the live answer keep the cut-off text on
+                # screen, but this turn may still turn out to call a tool.
+                text_start["continues_truncated"] = True
+            await self.emit(EventType.TEXT_MESSAGE_START, text_start)
             final_response: "ModelResponse | None" = None
             # Reasoning brackets its own message, lazily opened on the
             # first `ThinkingDeltaEvent` (not every turn reasons) and
@@ -741,7 +779,15 @@ class Agent:
                     final_response = event.response
             if reasoning_open:
                 await self.emit(EventType.REASONING_MESSAGE_END, {"turn_index": turn_index})
-            await self.emit(EventType.TEXT_MESSAGE_END, {"turn_index": turn_index})
+            text_end: dict = {"turn_index": turn_index}
+            if (
+                cut_off_parts and final_response is not None
+                and not self._extract_tool_calls(final_response.message)
+            ):
+                # Confirmed: this turn's text continues the cut-off reply, so
+                # the saved transcript joins them into one part.
+                text_end["joins_truncated"] = True
+            await self.emit(EventType.TEXT_MESSAGE_END, text_end)
             if final_response is None:
                 raise AgentError("Model.stream() completed without a StreamCompleteEvent")
             return final_response
@@ -793,6 +839,23 @@ class Agent:
             )
 
         await context.add(response_msg)
+
+        if response.stop_reason == StopReason.CANCELLED:
+            # Stop Generation (Phase 3b): the transport's `stream()` saw
+            # `runtime.cancellation_token` fire mid-response and returned
+            # early — `response_msg` (just added to context above) already
+            # carries whatever text streamed before that, with any
+            # in-progress tool call dropped (see `LangChainTransport.
+            # stream()`). Route to the SAME `status="cancelled"` outcome
+            # the PRE_TURN `check_not_cancelled` guard produces, so
+            # `AnswerFinalizer` has one cancelled-branch contract to
+            # handle regardless of which check caught it.
+            return StepOutcome("stop", result=await self.fail(
+                goal, "Cancelled", event="agent_cancelled",
+                summary=f"Agent cancelled mid-response (turn {turn_index})",
+                status="cancelled", detail={"turn_index": turn_index},
+            ))
+
         tool_calls = self._extract_tool_calls(response_msg)
 
         post_model_ctx = await hooks.dispatch_post_model(self._hooks, response_msg, tool_calls, turn_index, scope=turn_scope)
@@ -834,7 +897,9 @@ class Agent:
                 await self.emit(EventType.TURN_COMPLETE, {"turn_index": turn_index})
                 return StepOutcome("continue", turn=turn)
 
-            output = self.extract_text(response_msg)
+            # Joined as-is: the model resumes exactly where it was cut off,
+            # often mid-word, so any separator would corrupt the text.
+            output = "".join(cut_off_parts) + self.extract_text(response_msg)
             try:
                 await hooks.dispatch_guardrail_output(self._hooks, output or "", scope=turn_scope)
             except HookBlocked as e:

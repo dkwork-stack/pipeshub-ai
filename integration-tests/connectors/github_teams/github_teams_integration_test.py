@@ -10,7 +10,7 @@ change. Only the two frozen blocks snapshots are pinned by number.
 
 Every CI leg, every PR and the nightly cron share ONE GitHub org, and different PRs run
 at the same time. The primary and public repos are therefore never written to: the three
-mutation tests (orders 15-17) each create a throw-away connector scoped to the *mutation*
+mutation tests (orders 18-20) each create a throw-away connector scoped to the *mutation*
 repo and assert by external id, so nothing another run does can reach an assertion here.
 Code mutations are further confined to ``it/<run_id>/`` — the connector only syncs the
 default branch, so concurrent runs share it and only a path namespace keeps them apart.
@@ -18,7 +18,7 @@ default branch, so concurrent runs share it and only a path namespace keeps them
 
   order 1  TC-SYNC-001            — full sync baseline + graph self-consistency
   order 2  TC-GH-RG-001           — org/repo/child record-group hierarchy + App edge
-  order 3  TC-GH-USER-001         — AppUsers, USER_APP_RELATION, team→app gate edge
+  order 3  TC-GH-USER-001         — AppUsers, USER_APP_RELATION, no team→app gate edge (private repo)
   order 4  TC-GH-ISSUE-001        — reference issue TICKET properties
   order 5  TC-GH-ISSUE-002        — hierarchy + BLOCKS relation + entity relations
   order 6  TC-GH-ATTACH-001       — issue AND PR body attachments exist after base sync
@@ -30,14 +30,18 @@ default branch, so concurrent runs share it and only a path namespace keeps them
   order 12 TC-GH-CODE-HIER-001    — folder PARENT_CHILD chain + folder inventory
   order 13 TC-GH-CODE-TS-001      — code/folder source timestamps (polled)
   order 14 TC-GH-PERM-001         — private repo ACL, role mapping, 2-hop inheritance
-  order 15 TC-GH-PERM-002         — public repo ORG grant placement
+  order 15 TC-GH-PERM-002         — public repo ORG grant + one team→app gate edge (its own connector)
+  order 15 TC-GH-PERM-003         — a colleague with no GitHub account: private refused + unlisted, public opens + listed
   order 16 TC-GH-IDX-001          — indexing reaches COMPLETED / AUTO_INDEX_OFF
-  order 17 TC-INCR-ISSUE-001      — new issue + sub-issue, then title/comment update
-  order 18 TC-INCR-PR-001         — PR update-only: no new record, version += 1
-  order 19 TC-INCR-CODE-001       — new/update/rename/move/delete in one commit set
-  order 20 TC-FILTER-001          — REPO_IDS scoping: unlisted repos do not sync
-  order 21 TC-FILTER-002          — Index Code Files off: records exist, AUTO_INDEX_OFF
-  order 22 TC-GH-FILTEROPT-001    — org/repo picker options, search ranking, paging
+  order 17 TC-GH-CKPT-001         — issue / PR / code checkpoints at their exact values
+  order 18 TC-INCR-ISSUE-001      — new issues (one pre-closed → DONE), then edit + not_planned close
+  order 19 TC-INCR-PR-001         — PR update-only: no new record, version += 1; closed PR → CANCELLED
+  order 20 TC-INCR-CODE-001       — new/update/rename/move/delete in one commit set; untouched file stable
+  order 21 TC-FILTER-001          — REPO_IDS scoping: unlisted repos do not sync
+  order 22 TC-FILTER-002          — Index Code Files off: records exist, AUTO_INDEX_OFF
+  order 23 TC-GH-FILTEROPT-001    — org/repo picker options, search ranking, paging
+  order 24 TC-GH-ONEREPO-001      — enable refused for an instance holding two repositories
+  order 25 TC-GH-ONEREPO-002      — one repository saved via filters-sync enables and syncs alone
 """
 
 import logging
@@ -55,6 +59,7 @@ if str(_ROOT) not in sys.path:
 
 from app.config.constants.arangodb import (  # type: ignore[import-not-found]  # noqa: E402
     CollectionNames,
+    Connectors,
     MimeTypes,
     ProgressStatus,
 )
@@ -65,6 +70,8 @@ from helper.graph_provider_utils import (  # noqa: E402
     wait_for_sync_completion,
     wait_until_graph_condition,
 )
+from helper.record_access import wait_for_record_access  # noqa: E402
+from helper.second_user import SecondUser  # noqa: E402
 from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]  # noqa: E402
 from validation.graph_entity_validator import (  # noqa: E402
     assert_graph_entity_matches,
@@ -103,16 +110,22 @@ from connectors.github_teams.github_test_utils import (  # noqa: E402
     FileChange,
     add_comment,
     add_sub_issue,
+    blob_paths,
     blob_sha_for_path,
     delete_issue,
     commit_changes,
+    create_github_connector,
     create_issue,
     dedicated_connector,
     delete_issue_comment,
+    get_branch_head,
     get_issue,
     get_pull,
+    get_tree,
     list_filter,
+    list_pulls,
     sync_filters,
+    teardown_connector,
     tree_dirs,
     update_issue,
     update_pull,
@@ -176,6 +189,34 @@ async def _group_edge_count(
     return len(edges or [])
 
 
+async def _team_gate_edges(
+    graph_provider: GraphProviderProtocol, org_id: str, connector_id: str,
+) -> list[Any]:
+    """(Teams all_{org})-[USER_APP_RELATION]->(App): written only for a public repo,
+    whose ORG grant is otherwise unreachable for users with no AppUser."""
+    return await graph_provider.find_edges_between(
+        CollectionNames.TEAMS.value, f"all_{org_id}",
+        CollectionNames.APPS.value, connector_id,
+        CollectionNames.USER_APP_RELATION.value,
+    ) or []
+
+
+def _team_connector_ids(user: SecondUser) -> set[str]:
+    """Team-scoped connector ids this non-admin user is shown in the connector list."""
+    ids: set[str] = set()
+    page = 1
+    while True:
+        resp = user.get(f"/api/v1/connectors/?scope=team&limit=200&page={page}")
+        assert resp.status_code == 200, (
+            f"listing team connectors as {user.email} failed: HTTP {resp.status_code} {resp.text[:300]}"
+        )
+        body = resp.json()
+        ids.update(str(c.get("_key")) for c in body.get("connectors") or [])
+        if not (body.get("pagination") or {}).get("hasNext"):
+            return ids
+        page += 1
+
+
 def _restart_sync(pipeshub_client: PipeshubClient, connector_id: str) -> None:
     """Toggle off/on to trigger an incremental sync.
 
@@ -214,6 +255,12 @@ def _connector_name(kind: str) -> str:
     return f"github-teams-{kind}-{GH_IT_RUN_ID}-{uuid.uuid4().hex[:6]}"
 
 
+def _status_value(record: Any) -> str:
+    """``status`` hydrates as a ``Status`` enum on tickets and a plain string on pull
+    requests, so compare the value rather than ``str()`` of whichever came back."""
+    return str(getattr(record.status, "value", record.status))
+
+
 # =============================================================================
 # TestGitHubTeamsConnector — sync baseline and structure
 # =============================================================================
@@ -232,10 +279,8 @@ class TestGitHubTeamsConnector:
 
         Counts are asserted as *structural invariants* (which hold exactly, whatever
         the fixture contains) plus presence of every record the primary repo should
-        have produced. A global exact count would also have to model the public repo's
-        contents, which the fixture deliberately does not enumerate — and an exact
-        total would be the first thing to break when someone adds a file to a fixture
-        repo, without catching any real defect.
+        have produced. An exact total would be the first thing to break when someone
+        adds a file to the fixture repo, without catching any real defect.
         """
         connector_id = github_connector["connector_id"]
 
@@ -280,6 +325,23 @@ class TestGitHubTeamsConnector:
                 f"PR #{pr['number']} missing from the graph ({external_id})"
             )
 
+        # Every blob on the default branch, by external id. This connector applies no
+        # path exclusion of its own — every tree entry of type blob becomes a record —
+        # so a missing one can only mean a dropped tree page or a truncated walk, and
+        # neither moves any of the counts above.
+        missing_blobs = []
+        for entry in github_connector["primary_tree"]:
+            if entry.get("type") != "blob":
+                continue
+            if not await graph_provider.get_record_by_external_id(
+                connector_id, f"/{primary_id}/blob/{entry['path']}",
+            ):
+                missing_blobs.append(entry["path"])
+        assert not missing_blobs, (
+            f"blobs on {github_connector['primary_repo']['full_name']} with no CODE_FILE "
+            f"record: {missing_blobs}"
+        )
+
         graph_app = await graph_provider.get_app_metadata_by_connector_id(connector_id)
         assert graph_app is not None, f"apps document missing for connector {connector_id}"
         assert_graph_entity_matches(
@@ -289,7 +351,8 @@ class TestGitHubTeamsConnector:
             skip_compare=frozenset({
                 "created_at_timestamp", "updated_at_timestamp", "auth_type", "is_active",
                 "is_agent_active", "is_configured", "is_authenticated", "created_by",
-                "updated_by", "status", "is_locked",
+                "updated_by", "status", "is_locked", "last_synced_by",
+                "vector_membership_backfill_after_key",
             }),
         )
         logger.info("TC-SYNC-001 passed: %d records %s", total, by_type)
@@ -427,20 +490,16 @@ class TestGitHubTeamsConnector:
                 source_user_id=bot_id, connector_id=connector_id,
             ) is None, f"bot account {bot_id} was synced as an AppUser"
 
-        # The coarse gate edge: (Teams all_{org})-[USER_APP_RELATION]->(App). It grants
-        # nothing on its own, but the record-access query pre-filters on
-        # `connectorId IN user_apps_ids`, so without it a public repo's ORG grant is
-        # unreachable for anyone whose GitHub account never resolved to an AppUser.
-        gate_edges = await graph_provider.find_edges_between(
-            CollectionNames.TEAMS.value, f"all_{pipeshub_client.org_id}",
-            CollectionNames.APPS.value, connector_id,
-            CollectionNames.USER_APP_RELATION.value,
+        # The fixture connector holds only the private primary repo. Its users reach
+        # the App through their own USER_APP_RELATION above; the org-wide gate edge
+        # exists only for a public repo (asserted in TC-GH-PERM-002) and would list
+        # this connector for every org member.
+        gate_edges = await _team_gate_edges(graph_provider, pipeshub_client.org_id, connector_id)
+        assert not gate_edges, (
+            "private-repo connector carries the (Teams all_{org})→(App) USER_APP_RELATION "
+            "gate edge; ensure_team_app_edge must run only for a public repo"
         )
-        assert gate_edges, (
-            "missing (Teams all_{org})→(App) USER_APP_RELATION gate edge written by "
-            "ensure_team_app_edge at sync start"
-        )
-        logger.info("TC-GH-USER-001 passed: %d identities, gate edge present", len(emails))
+        logger.info("TC-GH-USER-001 passed: %d identities, no gate edge", len(emails))
 
 
 # =============================================================================
@@ -1226,74 +1285,155 @@ class TestGitHubTeamsPermissions:
         of every repo's grants. What keeps that union from leaking is that nothing
         inherits FROM it: the repo group deliberately does not, which is what this test
         asserts alongside the grant itself.
+
+        An instance syncs exactly one repository, so the public repo gets its own
+        connector here. The shared fixture connector holds only the private primary
+        repo, which is where the negative half is asserted.
         """
-        connector_id = github_connector["connector_id"]
+        primary = github_connector["primary_repo"]
         public = github_connector["public_repo"]
 
-        public_group = await graph_provider.get_record_group_by_external_id(
-            connector_id, str(public["id"]),
-        )
-        assert public_group is not None, "public repo record group missing"
-
-        # The ORG grant is materialised as a PERMISSION edge from the organization
-        # node to the record group. Counting edges alone would pass on collaborator
-        # grants and never notice the visibility-derived one was missing.
-        org_edges = await graph_provider.find_edges_between(
-            CollectionNames.ORGS.value, pipeshub_client.org_id,
-            CollectionNames.RECORD_GROUPS.value, public_group.id,
-            CollectionNames.PERMISSION.value,
-        )
-        assert org_edges, (
-            f"public repo {public['full_name']} has no organization → record-group "
-            "PERMISSION edge; the visibility-derived Permission(READ, ORG) is missing"
-        )
-        org_props = org_edges[0]
-        assert org_props.get("type") == "ORG", (
-            f"the visibility grant must be an ORG permission, got {org_props.get('type')!r}"
-        )
-        assert org_props.get("role") in _VALID_PERMISSION_ROLES, (
-            f"ORG grant carries role {org_props.get('role')!r}, which is not a "
-            f"PermissionType ({sorted(_VALID_PERMISSION_ROLES)})"
-        )
-
-        # The mirror image: a PRIVATE repo has no visibility floor, so it must carry no
-        # org-wide grant at all. Without this the ORG assertion above would still pass
-        # if the connector handed every repo an ORG grant regardless of visibility.
+        # The mirror image first: a PRIVATE repo has no visibility floor, so it must
+        # carry no org-wide grant at all. Without this the ORG assertion below would
+        # still pass if the connector handed every repo an ORG grant regardless of
+        # visibility.
         private_group = await graph_provider.get_record_group_by_external_id(
-            connector_id, str(github_connector["primary_repo"]["id"]),
+            github_connector["connector_id"], str(primary["id"]),
         )
-        assert private_group is not None
+        assert private_group is not None, "private primary repo record group missing"
         private_org_edges = await graph_provider.find_edges_between(
             CollectionNames.ORGS.value, pipeshub_client.org_id,
             CollectionNames.RECORD_GROUPS.value, private_group.id,
             CollectionNames.PERMISSION.value,
         )
         assert not private_org_edges, (
-            f"private repo {github_connector['primary_repo']['full_name']} carries an "
-            "org-wide PERMISSION edge; access to a private repo must come solely from "
-            "collaborators"
-        )
-        repo_group_perms = await graph_provider.count_permission_edges_to_record_groups(
-            connector_id, str(public["id"]),
+            f"private repo {primary['full_name']} carries an org-wide PERMISSION edge; "
+            "access to a private repo must come solely from collaborators"
         )
 
-        # The org group legitimately carries the union of every repo's grants, which is
-        # why nothing may inherit FROM it — the repo group deliberately does not.
-        org_group = await graph_provider.get_record_group_by_external_id(
-            connector_id, f"org-{github_connector['org_id']}",
-        )
-        assert org_group is not None
-        assert await _group_edge_count(
-            graph_provider, from_group=public_group, to_group=org_group,
-            edge_collection=CollectionNames.INHERIT_PERMISSIONS.value,
-        ) == 0, (
-            "the public repo group must not inherit from the org group; the org group "
-            "holds the union of every repo's grants in this org"
-        )
+        async with dedicated_connector(
+            pipeshub_client, graph_provider,
+            token=github_connector["token"], name=_connector_name("perm-public"),
+            filters=sync_filters(repo_ids=list_filter("in", [public["full_name"]])),
+            min_records=1,
+        ) as connector_id:
+            public_group = await graph_provider.get_record_group_by_external_id(
+                connector_id, str(public["id"]),
+            )
+            assert public_group is not None, "public repo record group missing"
+
+            # The ORG grant is materialised as a PERMISSION edge from the organization
+            # node to the record group. Counting edges alone would pass on collaborator
+            # grants and never notice the visibility-derived one was missing.
+            org_edges = await graph_provider.find_edges_between(
+                CollectionNames.ORGS.value, pipeshub_client.org_id,
+                CollectionNames.RECORD_GROUPS.value, public_group.id,
+                CollectionNames.PERMISSION.value,
+            )
+            assert org_edges, (
+                f"public repo {public['full_name']} has no organization → record-group "
+                "PERMISSION edge; the visibility-derived Permission(READ, ORG) is missing"
+            )
+            org_props = org_edges[0]
+            assert org_props.get("type") == "ORG", (
+                f"the visibility grant must be an ORG permission, got {org_props.get('type')!r}"
+            )
+            assert org_props.get("role") in _VALID_PERMISSION_ROLES, (
+                f"ORG grant carries role {org_props.get('role')!r}, which is not a "
+                f"PermissionType ({sorted(_VALID_PERMISSION_ROLES)})"
+            )
+            repo_group_perms = await graph_provider.count_permission_edges_to_record_groups(
+                connector_id, str(public["id"]),
+            )
+
+            # Without the gate edge the ORG grant above is unreachable for any org
+            # member whose GitHub account never resolved to an AppUser. Exactly one:
+            # the edge is ensured per public repo and must stay idempotent.
+            gate_edges = await _team_gate_edges(graph_provider, pipeshub_client.org_id, connector_id)
+            assert len(gate_edges) == 1, (
+                f"public-repo connector has {len(gate_edges)} (Teams all_{{org}})→(App) "
+                "USER_APP_RELATION gate edge(s); expected exactly 1"
+            )
+
+            # The org group legitimately carries the union of every repo's grants, which
+            # is why nothing may inherit FROM it — the repo group deliberately does not.
+            org_group = await graph_provider.get_record_group_by_external_id(
+                connector_id, f"org-{github_connector['org_id']}",
+            )
+            assert org_group is not None
+            assert await _group_edge_count(
+                graph_provider, from_group=public_group, to_group=org_group,
+                edge_collection=CollectionNames.INHERIT_PERMISSIONS.value,
+            ) == 0, (
+                "the public repo group must not inherit from the org group; the org group "
+                "holds the union of every repo's grants in this org"
+            )
         logger.info(
             "TC-GH-PERM-002 passed: %d grant(s) on the public repo group",
             repo_group_perms,
         )
+
+    @pytest.mark.order(15)
+    async def test_tc_gh_perm_003_colleague_without_github_account(
+        self,
+        github_connector: dict[str, Any],
+        graph_provider: GraphProviderProtocol,
+        pipeshub_client: PipeshubClient,
+        second_user: SecondUser,
+        github_rest: Any,
+    ) -> None:
+        """TC-GH-PERM-003: what a colleague with no GitHub account can open.
+
+        PERM-001 and PERM-002 check the edges; this asks the product, as a fresh org
+        member who is no collaborator on either repo. The private repo's issue must be
+        refused and the public repo's content must open. Each half keeps the other
+        honest: a user who is refused everything, or allowed everything, fails one.
+        """
+        primary = github_connector["primary_repo"]
+        issue = github_connector["reference_issue"]
+        private_record = await graph_provider.get_record_by_external_id(
+            github_connector["connector_id"], f"{primary['id']}/issues/{issue['number']}",
+        )
+        assert private_record is not None, f"private issue #{issue['number']} missing"
+        wait_for_record_access(
+            second_user, private_record.id, expect_access=False,
+            description=f"issue #{issue['number']} in private repo {primary['full_name']}",
+        )
+
+        public = github_connector["public_repo"]
+        # A named file rather than whatever the graph returns first, so a failure says
+        # which record and does not depend on query order.
+        public_paths = sorted(blob_paths(await get_tree(
+            github_rest, github_connector["org"], public["name"], public["default_branch"],
+        )))
+        assert public_paths, f"public repo {public['full_name']} has no files to open"
+        public_path = public_paths[0]
+        async with dedicated_connector(
+            pipeshub_client, graph_provider,
+            token=github_connector["token"], name=_connector_name("perm-colleague"),
+            filters=sync_filters(repo_ids=list_filter("in", [public["full_name"]])),
+            min_records=1,
+        ) as connector_id:
+            public_record = await wait_for_record_by_external_id(
+                graph_provider, connector_id, f"/{public['id']}/blob/{public_path}",
+                description=f"{public_path} from public repo {public['full_name']}",
+            )
+            wait_for_record_access(
+                second_user, public_record.id, expect_access=True,
+                description=f"{public_path} in public repo {public['full_name']}",
+            )
+
+            # The gate edge is also what lists a team connector for a non-admin, so
+            # the colleague sees the public-repo connector and not the private one.
+            listed = _team_connector_ids(second_user)
+            assert connector_id in listed, (
+                f"public-repo connector {connector_id} is not listed for {second_user.email}"
+            )
+            assert github_connector["connector_id"] not in listed, (
+                f"private-repo connector {github_connector['connector_id']} is listed for "
+                f"{second_user.email}, who is no collaborator on {primary['full_name']}"
+            )
+        logger.info("TC-GH-PERM-003 passed: private refused and unlisted, public opened and listed")
 
 
 # =============================================================================
@@ -1354,6 +1494,82 @@ class TestGitHubTeamsIndexing:
             )
         logger.info("TC-GH-IDX-001 passed: %d record(s) indexed", len(targets))
 
+    @pytest.mark.order(17)
+    async def test_tc_gh_ckpt_001_sync_points(
+        self,
+        github_connector: dict[str, Any],
+        github_rest: Any,
+        graph_provider: GraphProviderProtocol,
+    ) -> None:
+        """TC-GH-CKPT-001: one checkpoint per per-repo data group, at the right value.
+
+        Three independent checkpoints keyed ``GITHUB TEAMS/{repo_id}-{kind}/`` — note
+        the space in the connector name and the trailing slash from the empty entity
+        id. Issues and PRs store the sweep's high-water ``updated_at``; code stores the
+        default-branch HEAD. A missing or stale checkpoint is invisible in the graph:
+        the next sync silently re-walks the whole repo and re-upserts every record,
+        which is a reindex storm nothing else in this suite can see.
+
+        Exact values, not presence: the primary repo is read-only, so each watermark
+        must equal the newest ``updated_at`` GitHub reports for the listing the
+        connector reads, and the code checkpoint must sit on HEAD.
+        """
+        connector_id = github_connector["connector_id"]
+        repo = github_connector["primary_repo"]
+        repo_id = repo["id"]
+
+        def key(kind: str) -> str:
+            return f"{Connectors.GITHUB_TEAMS.value}/{repo_id}-{kind}/"
+
+        watermarks: dict[str, int] = {
+            "work-items": max(
+                epoch_ms(i["updated_at"]) for i in github_connector["primary_issues"]
+            ),
+        }
+        if github_connector["primary_pulls"]:
+            watermarks["pull-requests"] = max(
+                epoch_ms(p["updated_at"]) for p in github_connector["primary_pulls"]
+            )
+        else:
+            logger.warning(
+                "PR CHECKPOINT COVERAGE INACTIVE: %s has no pull requests", repo["full_name"],
+            )
+
+        for kind, expected in watermarks.items():
+            point = await graph_provider.get_sync_point(connector_id, key(kind))
+            assert point, (
+                f"no sync point stored for {key(kind)}; the next sync re-walks every "
+                f"{kind.replace('-', ' ')} in the repo instead of the delta"
+            )
+            actual = point.get("last_sync_time")
+            assert actual is not None and int(actual) == expected, (
+                f"{key(kind)} is at {actual!r}, expected {expected} — the newest "
+                f"updated_at on the primary repo's {kind.replace('-', ' ')} listing. "
+                "The sweep advances this to its high-water mark only after every page "
+                "succeeds, so a different value means the sweep stopped early or the "
+                "watermark was computed from the wrong field."
+            )
+
+        code_key = key("code-repository")
+        code_point = await graph_provider.get_sync_point(connector_id, code_key)
+        assert code_point, f"no sync point stored for {code_key}"
+        head = await get_branch_head(
+            github_rest, github_connector["org"], repo["name"], repo["default_branch"],
+        )
+        assert code_point.get("last_commit_sha") == head, (
+            f"code checkpoint is {code_point.get('last_commit_sha')!r} but the branch "
+            f"HEAD is {head!r}; the next incremental sync compares from the wrong commit"
+        )
+        # A default-branch rename is detected by comparing the stored name, and forces
+        # a full re-baseline; a wrong stored name either misses the rename or forces a
+        # re-baseline every run.
+        assert code_point.get("default_branch") == repo["default_branch"]
+        assert code_point.get("full_name") == repo["full_name"]
+        logger.info(
+            "TC-GH-CKPT-001 passed: %d watermark(s) exact, code at %s",
+            len(watermarks), head[:8],
+        )
+
 
 # =============================================================================
 # TestGitHubTeamsIncremental — dedicated connectors, mutation repo
@@ -1363,7 +1579,7 @@ class TestGitHubTeamsIndexing:
 class TestGitHubTeamsIncremental:
     """Mutation cases. Each owns its connector and asserts only by external id."""
 
-    @pytest.mark.order(17)
+    @pytest.mark.order(18)
     async def test_tc_incr_issue_001_new_issue_and_update(
         self,
         github_connector: dict[str, Any],
@@ -1371,8 +1587,17 @@ class TestGitHubTeamsIncremental:
         pipeshub_client: PipeshubClient,
         graph_provider: GraphProviderProtocol,
     ) -> None:
-        """TC-INCR-ISSUE-001: a new issue + sub-issue arrive on the next incremental,
-        then a title edit bumps the version and the revision."""
+        """TC-INCR-ISSUE-001: new issues arrive on the next incremental; an edit bumps
+        the version; state changes map to Status; untouched records stay put.
+
+        Three issues share the two resyncs. The parent is edited and closed as
+        ``not_planned`` in the update leg (version bump + CANCELLED). A third issue is
+        closed as ``completed`` before the first sync ever sees it (straight to DONE).
+        The sub-issue is never touched after its link is made: ``since`` is inclusive,
+        so the update-leg sweep re-fetches it anyway, and an unchanged revision must
+        come back as an idempotent upsert rather than a new version — a resync that
+        bumps untouched records re-embeds the whole repo every run.
+        """
         state = github_connector
         org = state["org"]
         repo_name = state["mutation_repo_name"]
@@ -1380,6 +1605,7 @@ class TestGitHubTeamsIncremental:
 
         parent_num: int | None = None
         child_num: int | None = None
+        done_num: int | None = None
         async with dedicated_connector(
             pipeshub_client, graph_provider,
             token=state["token"], name=_connector_name("incr-issue"),
@@ -1396,6 +1622,16 @@ class TestGitHubTeamsIncremental:
                     title=artifact_title("SubIssue"), body="Sub-issue of the above.",
                 )
                 child_num = child["number"]
+                done = await create_issue(
+                    github_rest, org, repo_name,
+                    title=artifact_title("DoneIssue"),
+                    body="Closed as completed before the first sync.",
+                )
+                done_num = done["number"]
+                await update_issue(
+                    github_rest, org, repo_name, done_num,
+                    state="closed", state_reason="completed",
+                )
 
                 sub_issues_supported = True
                 try:
@@ -1411,13 +1647,26 @@ class TestGitHubTeamsIncremental:
 
                 parent_external = f"{repo_id}/issues/{parent_num}"
                 child_external = f"{repo_id}/issues/{child_num}"
+                done_external = f"{repo_id}/issues/{done_num}"
                 before = await wait_for_record_by_external_id(
                     graph_provider, connector_id, parent_external,
                     description="TC-INCR-ISSUE-001 new issue (the `since` clock)",
                 )
-                await wait_for_record_by_external_id(
+                child_before = await wait_for_record_by_external_id(
                     graph_provider, connector_id, child_external,
                     description="TC-INCR-ISSUE-001 second new issue",
+                )
+                await wait_for_record_by_external_id(
+                    graph_provider, connector_id, done_external,
+                    description="TC-INCR-ISSUE-001 pre-closed issue",
+                )
+                done_record = await graph_provider.get_typed_record_by_external_id(
+                    connector_id, done_external,
+                )
+                assert done_record is not None, "typed record missing for the pre-closed issue"
+                assert _status_value(done_record) == "DONE", (
+                    f"an issue closed as completed must map to DONE, got "
+                    f"{done_record.status!r}"
                 )
 
                 if sub_issues_supported:
@@ -1432,7 +1681,12 @@ class TestGitHubTeamsIncremental:
                 # --- update leg ---
                 old_version = int(before.version)
                 new_title = artifact_title("Edited")
-                await update_issue(github_rest, org, repo_name, parent_num, title=new_title)
+                # Title edit and a not_planned close in one PATCH, so the resync that
+                # proves the version bump also proves the CANCELLED mapping.
+                await update_issue(
+                    github_rest, org, repo_name, parent_num,
+                    title=new_title, state="closed", state_reason="not_planned",
+                )
                 await add_comment(
                     github_rest, org, repo_name, parent_num, "Comment added by TC-INCR-ISSUE-001.",
                 )
@@ -1453,15 +1707,40 @@ class TestGitHubTeamsIncremental:
                 assert str(after.external_revision_id) == str(epoch_ms(live["updated_at"])), (
                     "external_revision_id must track the source updated_at in epoch ms"
                 )
+                after_typed = await graph_provider.get_typed_record_by_external_id(
+                    connector_id, parent_external,
+                )
+                assert after_typed is not None, "typed record missing after update"
+                assert _status_value(after_typed) == "CANCELLED", (
+                    f"an issue closed as not_planned must map to CANCELLED, got "
+                    f"{after_typed.status!r}; collapsing it to DONE loses the difference "
+                    "between finished and abandoned work"
+                )
+
+                child_after = await graph_provider.get_record_by_external_id(
+                    connector_id, child_external,
+                )
+                assert child_after is not None, "the untouched sub-issue disappeared"
+                assert child_after.id == child_before.id, (
+                    "the untouched sub-issue must keep its record vertex"
+                )
+                assert child_after.version == child_before.version, (
+                    f"the untouched sub-issue's version moved {child_before.version} → "
+                    f"{child_after.version}. An unchanged revision must be an idempotent "
+                    "upsert; bumping it re-queues every untouched issue for indexing on "
+                    "every sync."
+                )
+                assert child_after.external_revision_id == child_before.external_revision_id
                 logger.info(
-                    "TC-INCR-ISSUE-001 passed: version %s → %s", old_version, after.version,
+                    "TC-INCR-ISSUE-001 passed: version %s → %s, CANCELLED + DONE mapped, "
+                    "untouched sub-issue stable", old_version, after.version,
                 )
             finally:
-                for number in (child_num, parent_num):
+                for number in (done_num, child_num, parent_num):
                     if number:
                         await delete_issue(github_rest, org, repo_name, number)
 
-    @pytest.mark.order(18)
+    @pytest.mark.order(19)
     async def test_tc_incr_pr_001_update_only(
         self,
         github_connector: dict[str, Any],
@@ -1525,6 +1804,36 @@ class TestGitHubTeamsIncremental:
                 pr_count_before = await graph_provider.count_records_by_type(
                     connector_id, RecordType.PULL_REQUEST.value, scoped=True,
                 )
+
+                # The mutation repo carries closed, never-merged PRs left by earlier
+                # fixtures, and no read-only repo in the suite has one. One is enough
+                # to pin the CANCELLED branch: merged_at is None and state is closed.
+                closed = next(
+                    (
+                        p for p in await list_pulls(github_rest, org, repo_name, state="closed")
+                        if p.get("merged_at") is None
+                    ),
+                    None,
+                )
+                if closed is None:
+                    logger.warning(
+                        "CANCELLED PR COVERAGE INACTIVE: %s/%s has no closed unmerged PR",
+                        org, repo_name,
+                    )
+                else:
+                    closed_external = f"{repo_id}/pull/{closed['number']}"
+                    await wait_for_record_by_external_id(
+                        graph_provider, connector_id, closed_external,
+                        description="TC-INCR-PR-001 closed unmerged PR",
+                    )
+                    closed_typed = await graph_provider.get_typed_record_by_external_id(
+                        connector_id, closed_external,
+                    )
+                    assert closed_typed is not None, f"typed PR record missing for {closed_external}"
+                    assert _status_value(closed_typed) == "CANCELLED", (
+                        f"PR #{closed['number']} is closed with merged_at=None and must map "
+                        f"to CANCELLED, got {closed_typed.status!r}"
+                    )
 
                 # --- three kinds of update, no creation ---
                 await commit_changes(
@@ -1595,7 +1904,7 @@ class TestGitHubTeamsIncremental:
                 if comment_id:
                     await delete_issue_comment(github_rest, org, repo_name, comment_id)
 
-    @pytest.mark.order(19)
+    @pytest.mark.order(20)
     async def test_tc_incr_code_001_all_deltas(
         self,
         github_connector: dict[str, Any],
@@ -1619,6 +1928,7 @@ class TestGitHubTeamsIncremental:
         branch = repo["default_branch"]
 
         # Paths for this run only.
+        steady = it_path("code", "steady.txt")      # never touched after the baseline
         keep = it_path("code", "keep.txt")          # updated in place
         renamed_from = it_path("code", "before.txt")  # renamed within its directory
         renamed_to = it_path("code", "after.txt")
@@ -1642,6 +1952,7 @@ class TestGitHubTeamsIncremental:
             await commit_changes(
                 github_rest, org, repo_name, branch,
                 [
+                    FileChange.upsert(steady, "leave me alone\n"),
                     FileChange.upsert(keep, "v1\n"),
                     FileChange.upsert(renamed_from, "rename me\n"),
                     FileChange.upsert(moved_from, "move me\n"),
@@ -1655,7 +1966,7 @@ class TestGitHubTeamsIncremental:
                 return f"/{repo_id}/blob/{path}"
 
             baseline = {}
-            for path in (keep, renamed_from, moved_from, doomed):
+            for path in (steady, keep, renamed_from, moved_from, doomed):
                 baseline[path] = await wait_for_record_by_external_id(
                     graph_provider, connector_id, blob_id(path),
                     description=f"TC-INCR-CODE-001 baseline {path}",
@@ -1760,6 +2071,20 @@ class TestGitHubTeamsIncremental:
                 connector_id, blob_id(doomed),
             ) is None, f"deleted file {doomed} still has a record"
 
+            # (g) UNTOUCHED — the incremental path must leave it alone. A resync that
+            #     re-upserts every file passes (a)-(e) and still re-embeds the repo.
+            steady_after = await graph_provider.get_record_by_external_id(
+                connector_id, blob_id(steady),
+            )
+            assert steady_after is not None, f"untouched file {steady} disappeared"
+            assert steady_after.id == baseline[steady].id, "an untouched file must keep its vertex"
+            assert steady_after.version == int(baseline[steady].version), (
+                f"untouched file version moved {baseline[steady].version} → "
+                f"{steady_after.version}; the incremental sync rewrote records outside "
+                "the compare delta"
+            )
+            assert str(steady_after.external_revision_id) == str(baseline[steady].external_revision_id)
+
             # (f) Timestamps written by the first sync survived this resync.
             #     Neo4j `SET n += null` deletes a property, so upserting a record
             #     built with None dates silently wiped whatever the backfill filled.
@@ -1792,7 +2117,7 @@ class TestGitHubTeamsFilters:
     """Filter behaviour. Both cases build their own connector over repos nothing
     writes to, so they are the most parallel-safe tests in the suite."""
 
-    @pytest.mark.order(20)
+    @pytest.mark.order(21)
     async def test_tc_filter_001_repo_scoping(
         self,
         github_connector: dict[str, Any],
@@ -1851,7 +2176,7 @@ class TestGitHubTeamsFilters:
                 public["full_name"], total,
             )
 
-    @pytest.mark.order(21)
+    @pytest.mark.order(22)
     async def test_tc_filter_002_code_files_indexing_off(
         self,
         github_connector: dict[str, Any],
@@ -1927,7 +2252,7 @@ class TestGitHubTeamsFilters:
                 len(code_files), len(folders), len(tickets),
             )
 
-    @pytest.mark.order(22)
+    @pytest.mark.order(23)
     async def test_tc_gh_filteropt_001_dynamic_filter_options(
         self,
         github_connector: dict[str, Any],
@@ -2034,4 +2359,101 @@ class TestGitHubTeamsFilters:
         logger.info(
             "TC-GH-FILTEROPT-001 passed: %d org(s), %d repo(s), search + paging verified",
             len(org_ids), len(repo_ids),
+        )
+
+    @pytest.mark.order(24)
+    async def test_tc_gh_onerepo_001_enable_refused_for_two_repositories(
+        self,
+        github_connector: dict[str, Any],
+        pipeshub_client: PipeshubClient,
+        graph_provider: GraphProviderProtocol,
+    ) -> None:
+        """TC-GH-ONEREPO-001: an instance holding two repositories is refused on Enable.
+
+        One repository per instance is enforced at the toggle, the gate every connector
+        passes before it syncs; an instance configured before the rule never went through
+        the save check. It must be refused with a message telling the user to narrow the
+        selection down, and stay disabled.
+        """
+        state = github_connector
+        two = [state["primary_repo"]["full_name"], state["public_repo"]["full_name"]]
+        connector_id = create_github_connector(
+            pipeshub_client, token=state["token"], name=_connector_name("onerepo-refused"),
+            filters=sync_filters(repo_ids=list_filter("in", two)),
+        )
+        try:
+            resp = pipeshub_client.request(
+                "POST", f"/api/v1/connectors/{connector_id}/toggle", json={"type": "sync"},
+            )
+            assert resp.status_code == 400, (
+                "enabling an instance that holds two repositories must be refused; got "
+                f"HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+            assert "Narrow it down to one" in resp.text, (
+                "the refusal must tell the user to narrow the selection to one "
+                f"repository; body: {resp.text[:300]}"
+            )
+            assert not pipeshub_client.get_connector(connector_id).get("isActive"), (
+                "the enable was refused yet the connector is active"
+            )
+        finally:
+            # Log, never raise: a cleanup error must not replace the assertion that failed.
+            try:
+                await teardown_connector(pipeshub_client, graph_provider, connector_id)
+            except Exception as e:
+                logger.error("connector %s cleanup leaked: %s", connector_id, e)
+        logger.info("TC-GH-ONEREPO-001 passed: two repositories refused on enable")
+
+    @pytest.mark.order(25)
+    async def test_tc_gh_onerepo_002_single_repository_saves_enables_and_syncs(
+        self,
+        github_connector: dict[str, Any],
+        pipeshub_client: PipeshubClient,
+        graph_provider: GraphProviderProtocol,
+    ) -> None:
+        """TC-GH-ONEREPO-002: one repository saved through filters-sync enables and syncs,
+        and nothing else does.
+
+        The happy path through every check the rule added: the save route validates the
+        merged config, the toggle validates the stored one, and ``run_sync`` checks it
+        again before calling GitHub. A regression in any of them either refuses a valid
+        instance or lets a second repository in.
+        """
+        state = github_connector
+        public = state["public_repo"]
+        primary = state["primary_repo"]
+        connector_id = create_github_connector(
+            pipeshub_client, token=state["token"], name=_connector_name("onerepo-sync"),
+        )
+        try:
+            saved = pipeshub_client.request(
+                "PUT", f"/api/v1/connectors/{connector_id}/config/filters-sync",
+                json={"filters": sync_filters(repo_ids=list_filter("in", [public["full_name"]]))},
+            )
+            assert saved.status_code == 200, (
+                "saving exactly one repository must succeed; got HTTP "
+                f"{saved.status_code}: {saved.text[:300]}"
+            )
+
+            pipeshub_client.toggle_sync(connector_id, enable=True)
+            await wait_for_sync_completion(
+                pipeshub_client, graph_provider, connector_id,
+                min_records=1, timeout=GH_SYNC_WAIT_SEC,
+            )
+            assert await graph_provider.get_record_group_by_external_id(
+                connector_id, str(public["id"]),
+            ) is not None, f"{public['full_name']} was saved and enabled but did not sync"
+            assert await graph_provider.get_record_group_by_external_id(
+                connector_id, str(primary["id"]),
+            ) is None, (
+                f"{primary['full_name']} was never selected yet synced; the instance must "
+                "hold exactly one repository"
+            )
+        finally:
+            try:
+                await teardown_connector(pipeshub_client, graph_provider, connector_id)
+            except Exception as e:
+                logger.error("connector %s cleanup leaked: %s", connector_id, e)
+        logger.info(
+            "TC-GH-ONEREPO-002 passed: %s saved, enabled and synced alone", public["full_name"],
         )

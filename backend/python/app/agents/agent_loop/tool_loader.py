@@ -33,7 +33,7 @@ from app.agent_loop_lib.tools.errors import (
 )
 from app.agent_loop_lib.tools.registry import ToolRegistry
 from app.agent_loop_lib.tools.toolset import ToolsetBuilder as AgentLoopToolsetBuilder
-from app.agents.agent_loop.instance_creator import ToolInstanceCreator
+from app.agents.agent_loop.instance_creator import ToolInstanceCreator, configured_name_matches
 from app.agents.agent_loop.tool_adapter import PipesHubStructuredToolAdapter, split_original_tool_name
 from app.agents.agent_loop.web_tool_adapter import WebToolAdapter
 from app.agents.tools.factories.base import ToolsetAuthError
@@ -136,6 +136,7 @@ def _build_dynamic_tools(context: "AgentContext") -> list["Tool"]:
                 org_id=state.get("org_id"),
                 conversation_id=state.get("conversation_id"),
                 blob_store=state.get("blob_store"),
+                user_id=state.get("user_id"),
             )
             setattr(execute_query_tool, "_original_name", "sql.execute_sql_query")
             app_name, tool_name = split_original_tool_name(execute_query_tool)
@@ -365,9 +366,7 @@ class PipesHubToolLoader:
         ``"calendar"``) and the agent's configured toolset names from the graph
         DB (e.g. ``"googledrive"``, ``"googlecalendar"``).
         """
-        if ts_name in configured_apps:
-            return True
-        return any(cfg_name.endswith(ts_name) for cfg_name in configured_apps)
+        return any(configured_name_matches(ts_name, cfg_name) for cfg_name in configured_apps)
 
 
 __all__ = ["PipesHubToolLoader"]

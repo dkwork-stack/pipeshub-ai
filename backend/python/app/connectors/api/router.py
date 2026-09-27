@@ -83,12 +83,14 @@ from app.edition_config import (
 from app.edition_services import get_data_entities_processor_cls
 from app.connectors.core.base.connector.connector_service import BaseConnector, ConnectorInitError
 from app.connectors.core.base.connector.instance_lock import connector_init_lock
+from app.connectors.core.base.error.stream_errors import to_internal_service_error, to_stream_error
 from app.connectors.core.base.token_service.oauth_service import (
     OAuthProvider,
     OAuthToken,
 )
 from app.connectors.core.constants import (
     AuthFieldKeys,
+    ConnectorErrorCodes,
     ConnectorRegistryAuthMetadataKeys,
     ConnectorRequestKeys,
     ConnectorStateKeys,
@@ -98,19 +100,9 @@ from app.connectors.core.factory.connector_factory import ConnectorFactory
 from app.connectors.core.registry.auth_builder import AuthType
 from app.connectors.core.registry.connector_builder import ConnectorScope
 from app.connectors.core.registry.connector_registry import ConnectorRegistry
+from app.connectors.core.registry.filters import sync_filter_selection_problems
 from app.connectors.core.registry.auth_utils import include_jira_scope_enabled
 from app.connectors.sources.localKB.handlers.knowledge_hub_service import FOLDER_MIME_TYPES
-from app.connectors.sources.local_fs.connector import LocalFsConnector
-from app.connectors.sources.local_fs.file_events import (
-    _normalize_connector_type_value,
-    _parse_local_fs_file_event_batch_request,
-    _parse_local_fs_uploaded_file_event_batch_request,
-    _update_connector_status,
-)
-from app.connectors.sources.local_fs.models import (
-    LocalFsFileEventBatchStats,
-    LocalFsFileEventSubmissionResponse,
-)
 from app.connectors.services.kafka_service import KafkaService
 from app.connectors.services.vector_store_rebuild import (
     VectorStoreRebuildBusyError,
@@ -126,6 +118,7 @@ from app.connectors.services.vector_store_rebuild import (
 from app.edition_containers import ConnectorAppContainer
 from app.core.signed_url import SignedUrlHandler
 from app.models.entities import Record, RecordType
+from app.modules.demo_data.access import is_hidden_demo_record
 from app.services.cache.invalidation_hooks import notify_kb_records_changed
 from app.services.featureflag.config.config import CONFIG
 from app.services.featureflag.platform_settings import read_platform_feature_flag
@@ -134,14 +127,38 @@ from app.services.vector_db.rebuild_state import PHASE_DROPPING, get_cleanup_pha
 from app.utils.api_call import make_api_call
 from app.utils.chat_helpers import record_to_text
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
+from app.utils.user_messages import (
+    EPUB_PREVIEW_UNAVAILABLE,
+    action_failed,
+    not_found,
+    provider_failure,
+)
 from app.utils.jwt import generate_jwt
 from app.utils.logger import create_logger
 from app.utils.oauth_config import extract_oauth_error_message, fetch_oauth_config_by_id, get_oauth_config
 from app.utils.retry import retry_async
-from app.utils.streaming import create_stream_record_response
+from app.utils.streaming import create_stream_record_response, start_streaming_response
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 logger = create_logger("connector_service")
+
+# The registry raises plain ValueErrors on the create path, some of which it wrote
+# for the person setting the connector up. Their text names internals, so each one
+# is answered with the same advice in our own words; anything else is a generic
+# "check the settings".
+NAME_TAKEN = "That name is already used by another connector. Pick a different name."
+
+
+def _setup_failure_message(exc: ValueError) -> str:
+    text = str(exc)
+    if "already exists" in text:
+        return NAME_TAKEN
+    if "selected_auth_type is required" in text:
+        return "Choose how this connector signs in, then try again."
+    if "is not supported for connector" in text:
+        return "That sign-in method isn't supported for this connector. Pick one of the options offered, then try again."
+    return "We couldn't set up this connector with those details. Check the settings and try again."
+
 
 router = APIRouter()
 
@@ -250,6 +267,15 @@ def get_pdf_conversion_info(
     return needs_conversion, record_name, file_extension
 
 
+def _refuse_epub_pdf_preview(file_extension: str | None) -> None:
+    if (file_extension or "").lower().lstrip(".") == "epub":
+        # LibreOffice can write EPUB but has no filter to open it.
+        raise HTTPException(
+            status_code=HttpStatusCode.UNPROCESSABLE_ENTITY.value,
+            detail=EPUB_PREVIEW_UNAVAILABLE,
+        )
+
+
 async def _recover_artifact_version(
     record: Record,
     org_id: str,
@@ -341,7 +367,8 @@ async def _stream_artifact_from_storage(
             )
             if storage_version is None:
                 raise HTTPException(
-                    status_code=HttpStatusCode.NOT_FOUND.value, detail=str(e),
+                    status_code=HttpStatusCode.NOT_FOUND.value,
+                    detail=not_found("This version of the file"),
                 ) from e
         logger.info(
             "Version-pinned stream: resolved storage_version=%s for registry version=%s",
@@ -365,7 +392,16 @@ async def _stream_artifact_from_storage(
         "scopes": ["storage:token"],
     }
     storage_token = await generate_jwt(config_service, jwt_payload)
-    response = await make_api_call(route=buffer_url, token=storage_token)
+    try:
+        response = await make_api_call(route=buffer_url, token=storage_token)
+    except Exception as e:
+        # make_api_call raises ApiCallError carrying the storage service's own
+        # status; without this it falls through to a blanket 500.
+        logger.error(
+            "Failed to fetch artifact buffer for record %s: %s",
+            record.id, str(e), exc_info=True,
+        )
+        raise to_internal_service_error(e) from e
 
     if isinstance(response["data"], dict):
         data = response["data"].get("data")
@@ -409,6 +445,43 @@ async def get_kafka_service(request: Request) -> KafkaService:
     return container.kafka_service()
 
 
+async def _invoke_connector_stream(
+    connector_obj: BaseConnector,
+    record: Record,
+    user_id: str | None = None,
+) -> Response | StreamingResponse | None:
+    """Call the connector's stream_record and resolve the source call eagerly.
+
+    Mapping happens here so every source failure — whether raised while
+    building the response or on the stream's first chunk — becomes a real
+    status before Starlette commits one.
+    """
+    # Same source the connectors use, so a failure names one connector
+    # regardless of whether it surfaced here or inside stream_record.
+    connector_display = connector_obj.display_name
+    try:
+        app_name = connector_obj.get_app_name()
+        if app_name in (
+            Connectors.GOOGLE_DRIVE_WORKSPACE,
+            Connectors.GOOGLE_MAIL_WORKSPACE,
+        ):
+            buffer = await connector_obj.stream_record(record, user_id)
+        else:
+            buffer = await connector_obj.stream_record(record)
+
+        if isinstance(buffer, StreamingResponse):
+            buffer = await start_streaming_response(buffer)
+        return buffer
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Error streaming record %s from %s: %s",
+            record.id, connector_display, str(e), exc_info=True,
+        )
+        raise to_stream_error(e, connector=connector_display) from e
+
+
 async def _resolve_record_content_response(
     *,
     record: Record,
@@ -428,6 +501,10 @@ async def _resolve_record_content_response(
     new agent-facing internal content endpoint, so the routing decision lives
     in exactly one place.
     """
+    if convert_to == MimeTypes.PDF.value:
+        # Before fetching, so a failed fetch cannot hide why there is no preview.
+        _refuse_epub_pdf_preview(get_pdf_conversion_info(record)[2])
+
     if record.record_type == RecordType.ARTIFACT or record.connector_name in (
         Connectors.ATTACHMENTS, Connectors.CODING_SANDBOX,
     ):
@@ -459,12 +536,7 @@ async def _resolve_record_content_response(
         logger=logger,
     )
 
-    if connector_obj.get_app_name() in (
-        Connectors.GOOGLE_DRIVE_WORKSPACE, Connectors.GOOGLE_MAIL_WORKSPACE,
-    ):
-        buffer = await connector_obj.stream_record(record, user_id)
-    else:
-        buffer = await connector_obj.stream_record(record)
+    buffer = await _invoke_connector_stream(connector_obj, record, user_id)
 
     if convert_to == MimeTypes.PDF.value:
         needs_conversion, record_name, file_extension = get_pdf_conversion_info(record)
@@ -547,6 +619,7 @@ async def get_record_content_internal(
                 status_code=HttpStatusCode.FORBIDDEN.value,
                 detail="You do not have permission to access this record",
             )
+        await _refuse_hidden_demo_record(graph_provider, config_service, org_id, user_id, getattr(record, "connector_id", None))
 
         return await _resolve_record_content_response(
             record=record,
@@ -566,8 +639,25 @@ async def get_record_content_internal(
         logger.error("Unexpected error in get_record_content_internal: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error fetching record content: {e}",
+            detail=action_failed("open this file"),
         ) from e
+
+
+async def _refuse_hidden_demo_record(
+    graph_provider: IGraphDBProvider,
+    config_service: ConfigurationService,
+    org_id: str,
+    user_id: str,
+    connector_id: str | None,
+) -> None:
+    """Opening a switched-off demo record by id answers like a record the user cannot see."""
+    try:
+        hidden = await is_hidden_demo_record(graph_provider, config_service, org_id, user_id, connector_id)
+    except Exception as exc:
+        logger.warning("demo data setting unreadable for user=%s: %s", user_id, exc)
+        return
+    if hidden:
+        raise HTTPException(status_code=HttpStatusCode.NOT_FOUND.value, detail="Record not found")
 
 
 class ReindexFailedRequest(BaseModel):
@@ -626,7 +716,7 @@ async def get_validated_connector_instance(
         logger.error(f"Connector instance {connector_id} not found or access denied")
         raise HTTPException(
             status_code=HttpStatusCode.NOT_FOUND.value,
-            detail=f"Connector instance {connector_id} not found or access denied"
+            detail=not_found("This connector")
         )
 
     # Check beta connector access
@@ -680,6 +770,52 @@ def _check_connector_not_locked(instance: dict[str, Any]) -> None:
             status_code=HttpStatusCode.CONFLICT.value,
             detail=detail,
         )
+
+
+def _is_local_fs_connector_type(connector_type: str) -> bool:
+    return (connector_type or "").strip().upper().replace(" ", "_") == Connectors.LOCAL_FS.value
+
+
+def _local_fs_owner_claim(
+    connector_id: str, instance: dict[str, Any], body: dict[str, Any]
+) -> dict[str, Any]:
+    """Owner-device fields to write when enabling a Local FS connector.
+
+    Raises 409 when the caller is not the owner device. The code leads the
+    detail string because Node forwards Python's ``detail`` only as a message.
+    """
+    device_id = str(body.get("deviceId") or "").strip()
+    device_name = str(body.get("deviceName") or "").strip()
+    owner_id = instance.get(ConnectorStateKeys.OWNER_DEVICE_ID)
+    owner_name = instance.get(ConnectorStateKeys.OWNER_DEVICE_NAME)
+
+    if not owner_id:
+        if not device_id:
+            raise HTTPException(
+                status_code=HttpStatusCode.CONFLICT.value,
+                detail=(
+                    f"{ConnectorErrorCodes.DESKTOP_UNCLAIMED}: Connector {connector_id} has no "
+                    "owner device yet. Enable sync from the desktop app on the machine that "
+                    "owns the folder."
+                ),
+            )
+        return {
+            ConnectorStateKeys.OWNER_DEVICE_ID: device_id,
+            ConnectorStateKeys.OWNER_DEVICE_NAME: device_name or None,
+        }
+
+    if device_id != owner_id:
+        raise HTTPException(
+            status_code=HttpStatusCode.CONFLICT.value,
+            detail=(
+                f"{ConnectorErrorCodes.DESKTOP_OWNED_BY_OTHER_DEVICE}: Connector {connector_id} "
+                f"is owned by device '{owner_name or owner_id}'. Enable sync from the desktop "
+                "app on that machine."
+            ),
+        )
+    if device_name and device_name != owner_name:
+        return {ConnectorStateKeys.OWNER_DEVICE_NAME: device_name}
+    return {}
 
 
 async def require_connector_not_locked(
@@ -837,6 +973,56 @@ def _trim_connector_config(config: dict[str, Any]) -> dict[str, Any]:
 
     return trimmed_config
 
+
+def _require_filter_sections_are_objects(filters: object) -> None:
+    """400 when ``filters.sync`` / ``filters.indexing`` is present but not an object.
+
+    The merge below stores the section verbatim, and a stored ``null`` later
+    breaks ``load_connector_filters`` (``.get`` on ``None``) at sync time.
+    """
+    if not isinstance(filters, dict):
+        return
+    for key in ("sync", "indexing"):
+        if key in filters and not isinstance(filters[key], dict):
+            raise HTTPException(
+                status_code=HttpStatusCode.BAD_REQUEST.value,
+                detail=f"filters.{key} must be an object",
+            )
+
+
+async def _validate_sync_filter_selections(
+    connector_registry: ConnectorRegistry,
+    connector_type: str,
+    config: dict[str, Any],
+    action: str,
+) -> None:
+    """400 when a required sync filter (e.g. the one repository) is not set in ``config``.
+
+    Save routes pass the *merged* config so a partial PUT cannot clear the field.
+
+    ``connector_type`` must be the instance's ``type`` verbatim: registry lookup is
+    exact-match on the registered name ("GitHub Teams"), so an upper- or lower-cased
+    variant resolves to no metadata and skips validation entirely.
+    """
+    metadata = await connector_registry.get_connector_metadata(connector_type)
+    if not isinstance(metadata, dict):
+        return  # unknown connector type: nothing to validate against
+    schema_fields = (
+        metadata.get("config", {})
+        .get("filters", {})
+        .get("sync", {})
+        .get("schema", {})
+        .get("fields", [])
+    )
+    schema_fields = [f for f in schema_fields if isinstance(f, dict)]
+    sync_values = ((config.get("filters") or {}).get("sync") or {}).get("values") or {}
+    problems = sync_filter_selection_problems(
+        schema_fields, sync_values if isinstance(sync_values, dict) else {}, action
+    )
+    if problems:
+        raise HTTPException(status_code=HttpStatusCode.BAD_REQUEST.value, detail=problems[0])
+
+
 def _caller_org_and_user(request: Request) -> tuple[str, str, bool]:
     """Return (org_id, user_id, is_indexing_service) for the signed-URL routes.
 
@@ -941,7 +1127,7 @@ async def get_signed_url(
         raise
     except Exception as e:
         logger.error(f"Error getting signed URL: {repr(e)}")
-        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=str(e)) from e
+        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=action_failed("open this file")) from e
 
 @router.delete("/api/v1/delete/record/{record_id}", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_DELETE, OAuthScopes.KB_DELETE))])
 @inject
@@ -957,7 +1143,7 @@ async def handle_record_deletion(
         )
         if not response:
             raise HTTPException(
-                status_code=HttpStatusCode.NOT_FOUND.value, detail=f"Record with ID {record_id} not found"
+                status_code=HttpStatusCode.NOT_FOUND.value, detail=not_found("This file")
             )
         return {
             "status": "success",
@@ -970,7 +1156,7 @@ async def handle_record_deletion(
         logger.error(f"Error deleting record: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Internal server error while deleting record: {str(e)}",
+            detail=action_failed("delete this file"),
         ) from e
 
 @router.get("/api/v1/internal/stream/record/{record_id}/", response_model=None)
@@ -1031,9 +1217,14 @@ async def stream_record_internal(
                 "scopes": ["storage:token"],
             }
             token = await generate_jwt(config_service, jwt_payload)
-            response = await make_api_call(
-                route=buffer_url, token=token
-            )
+            try:
+                response = await make_api_call(route=buffer_url, token=token)
+            except Exception as e:
+                logger.error(
+                    "Failed to fetch KB buffer for record %s: %s",
+                    record.id, str(e), exc_info=True,
+                )
+                raise to_internal_service_error(e) from e
             if isinstance(response["data"], dict):
                 data = response['data'].get('data')
                 buffer = bytes(data) if isinstance(data, list) else data
@@ -1065,25 +1256,25 @@ async def stream_record_internal(
             logger=logger,
         )
 
-        if connector_obj.get_app_name() == Connectors.GOOGLE_DRIVE_WORKSPACE or connector_obj.get_app_name() == Connectors.GOOGLE_MAIL_WORKSPACE:
-            return await connector_obj.stream_record(record, token_user_id)
-        else:
-            return await connector_obj.stream_record(record)
+        return await _invoke_connector_stream(
+            connector_obj, record, token_user_id
+        )
 
     except HTTPException:
         raise
     except Exception as e:
-        # exc_info preserves the full traceback in the connector logs;
-        # the message is also echoed into the response detail so the
-        # calling service (e.g. the indexing consumer) does not see a
-        # constant "Error streaming record" with no actionable cause.
-        # This endpoint is JWT-protected and internal-only, so surfacing
-        # the underlying error message is consistent with how the other
-        # internal handlers in this router (e.g. delete_record) behave.
         logger.error("Unexpected error in stream_record_internal: %s", str(e), exc_info=True)
+        mapped = to_stream_error(e)
+        if mapped.status_code != HttpStatusCode.INTERNAL_SERVER_ERROR.value:
+            # A classified failure keeps its status so the indexing consumer
+            # can tell "retry later" from "permanently failed".
+            raise mapped from e
+        # Unclassified: this endpoint is JWT-protected and internal-only, so
+        # echo the underlying message rather than leaving the consumer with a
+        # constant string that has no actionable cause.
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error streaming record: {e}",
+            detail=action_failed("open this file"),
         ) from e
 
 @router.get(
@@ -1164,6 +1355,9 @@ async def download_file(
                 )
 
         connector_id = record.connector_id
+        await _refuse_hidden_demo_record(
+            graph_provider, request.app.container.config_service(), org_id, user_id, connector_id
+        )
         # Get connector instance to check scope and existence
         connector_instance = await graph_provider.get_document(connector_id, CollectionNames.APPS.value)
         connector_type = connector_instance.get("type", None) if connector_instance else None
@@ -1189,8 +1383,8 @@ async def download_file(
         logger.error("HTTPException: %s", str(e))
         raise e
     except Exception as e:
-        logger.error("Error downloading file: %s", str(e))
-        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail="Error downloading file") from e
+        logger.error("Error downloading file: %s", str(e), exc_info=True)
+        raise to_stream_error(e) from e
 
 
 @router.get("/api/v1/stream/record/{record_id}", response_model=None, dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ, OAuthScopes.KB_READ))])
@@ -1244,6 +1438,7 @@ async def stream_record(
                 status_code=HttpStatusCode.FORBIDDEN.value,
                 detail="You do not have permission to access this record"
             )
+        await _refuse_hidden_demo_record(graph_provider, config_service, org_id, user_id, getattr(record, "connector_id", None))
         is_admin = is_request_admin(request)
         return await _resolve_record_content_response(
             record=record,
@@ -1260,8 +1455,8 @@ async def stream_record(
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error("Error downloading file: %s", str(e))
-        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail="Error downloading file") from e
+        logger.error("Error streaming record: %s", str(e), exc_info=True)
+        raise to_stream_error(e) from e
 
 
 @router.post("/api/v1/record/buffer/convert", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ))])
@@ -1344,11 +1539,11 @@ async def get_record_stream(request: Request, file: UploadFile = File(...)) -> S
 
                 except FileNotFoundError as e:
                     logger.error(str(e))
-                    raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=str(e)) from e
+                    raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=action_failed("open this file")) from e
                 except Exception as e:
                     logger.error(f"Conversion error: {str(e)}")
                     raise HTTPException(
-                        status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=f"Conversion error: {str(e)}"
+                        status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=action_failed("open this file")
                     ) from e
         finally:
             await file.close()
@@ -1463,6 +1658,7 @@ async def convert_buffer_to_pdf_stream(
     Raises:
         HTTPException: If conversion fails
     """
+    _refuse_epub_pdf_preview(file_extension)
     with tempfile.TemporaryDirectory() as temp_dir:
         safe_record_name = Path(record_name).name if record_name else "file"
         normalized_extension = (file_extension or "").lower().lstrip(".")
@@ -1671,6 +1867,10 @@ async def get_record_by_id(
         )
         logger.debug(f"🚀 has_access: {has_access}")
         if has_access:
+            doc = await graph_provider.get_document(record_id, CollectionNames.RECORDS.value)
+            await _refuse_hidden_demo_record(
+                graph_provider, container.config_service(), org_id, user_id, (doc or {}).get("connectorId")
+            )
             return has_access
         else:
             raise HTTPException(
@@ -1711,6 +1911,10 @@ async def get_record_content(
                 status_code=HttpStatusCode.FORBIDDEN.value,
                 detail="You do not have permission to access this record",
             )
+        doc = await graph_provider.get_document(record_id, CollectionNames.RECORDS.value)
+        await _refuse_hidden_demo_record(
+            graph_provider, container.config_service(), org_id, user_id, (doc or {}).get("connectorId")
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -2045,11 +2249,9 @@ async def delete_record(
                 response["vectorCleanupFailedRecordIds"] = [record_id]
             return response
         else:
-            logger.error(f"❌ Failed to delete record {record_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to delete record")
-            )
+            logger.error("❌ Failed to delete record %s: %s", record_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "delete this file")
+            raise HTTPException(status_code=status_code, detail=detail)
 
     except HTTPException:
         raise
@@ -2057,7 +2259,7 @@ async def delete_record(
         logger.error(f"❌ Error deleting record {record_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error while deleting record: {str(e)}"
+            detail=action_failed("delete this file")
         ) from e
 
 def _parse_reindex_body(request_body: dict | None) -> tuple[int, list[str] | None]:
@@ -2205,11 +2407,9 @@ async def reindex_single_record(
                 "depth": depth
             }
         else:
-            logger.error(f"❌ Failed to reindex record {record_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to reindex record")
-            )
+            logger.error("❌ Failed to reindex record %s: %s", record_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "reindex this file")
+            raise HTTPException(status_code=status_code, detail=detail)
 
     except HTTPException:
         raise
@@ -2217,7 +2417,7 @@ async def reindex_single_record(
         logger.error(f"❌ Error reindexing record {record_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error while reindexing record: {str(e)}"
+            detail=action_failed("start reindexing this file")
         ) from e
 
 @router.get("/api/v1/stats", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ, OAuthScopes.KB_READ))])
@@ -2245,7 +2445,7 @@ async def get_connector_stats_endpoint(
         raise
     except Exception as e:
         logger.error(f"Error getting connector stats: {str(e)}")
-        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=f"Internal server error while getting connector stats: {str(e)}") from e
+        raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail=action_failed("load connector activity")) from e
 
 @router.post("/api/v1/record-groups/{record_group_id}/reindex", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_SYNC, OAuthScopes.KB_WRITE)), Depends(require_connector_not_locked_for_record_group)])
 @inject
@@ -2285,11 +2485,9 @@ async def reindex_record_group(
         )
 
         if not result["success"]:
-            logger.error(f"❌ Failed to reindex record group {record_group_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to reindex record group")
-            )
+            logger.error("❌ Failed to reindex record group %s: %s", record_group_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "reindex these files")
+            raise HTTPException(status_code=status_code, detail=detail)
 
         # Publish reindex event (router is responsible for event publishing)
         connector_id = result.get("connectorId")
@@ -2335,7 +2533,7 @@ async def reindex_record_group(
             logger.error(f"❌ Failed to publish reindex event: {str(event_error)}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to publish reindex event: {str(event_error)}"
+                detail=action_failed("start reindexing these files")
             ) from event_error
 
     except HTTPException:
@@ -2344,7 +2542,7 @@ async def reindex_record_group(
         logger.error(f"❌ Error reindexing record group {record_group_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error while reindexing record group: {str(e)}"
+            detail=action_failed("start reindexing these files")
         ) from e
 
 
@@ -2372,7 +2570,8 @@ async def _accept_vector_store_job(
     except VectorStoreRebuildBusyError as exc:
         raise HTTPException(
             status_code=HttpStatusCode.CONFLICT.value,
-            detail=str(exc),
+            # the rebuild errors carry messages written for the person asking
+            detail=str(exc),  # user-written message
         ) from exc
 
     if operation == "reindex":
@@ -2401,7 +2600,8 @@ async def _accept_vector_store_job(
         await release_rebuild_lock(lock, redis)
         raise HTTPException(
             status_code=HttpStatusCode.CONFLICT.value,
-            detail=str(exc),
+            # the rebuild errors carry messages written for the person asking
+            detail=str(exc),  # user-written message
         ) from exc
     except Exception:
         await release_rebuild_lock(lock, redis)
@@ -2575,7 +2775,7 @@ async def reindex_connector(
         if not instance:
             raise HTTPException(
                 status_code=404,
-                detail=f"Connector instance {connector_id} not found or access denied",
+                detail=not_found("This connector"),
             )
         if not instance.get("isActive", False):
             raise HTTPException(
@@ -2613,7 +2813,7 @@ async def reindex_connector(
             logger.error(f"❌ Failed to publish reindex event: {str(event_error)}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to publish reindex event: {str(event_error)}",
+                detail=action_failed("start reindexing this connector"),
             ) from event_error
 
         return {
@@ -2630,7 +2830,7 @@ async def reindex_connector(
         logger.error(f"❌ Error reindexing connector {connector_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error while reindexing connector: {str(e)}"
+            detail=action_failed("start reindexing this connector")
         ) from e
 
 
@@ -2908,7 +3108,7 @@ async def get_connector_registry(
         logger.error(f"❌ Error getting connector registry: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting connector registry: {str(e)}"
+            detail=action_failed("load the list of connectors")
         ) from e
 
 
@@ -3110,7 +3310,7 @@ async def get_all_scheduled_connector_instances_internal(
         logger.error("Error enumerating scheduled connector instances: %s", str(e))
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error enumerating scheduled connectors: {str(e)}",
+            detail=action_failed("load your connectors"),
         ) from e
 
 
@@ -3190,7 +3390,7 @@ async def get_connector_instances(
         logger.error(f"❌ Error getting connector instances: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting connector instances: {str(e)}"
+            detail=action_failed("load your connectors")
         ) from e
 
 
@@ -3233,7 +3433,7 @@ async def get_active_connector_instances(request: Request) -> dict[str, Any]:
         logger.error(f"Error getting active connector instances: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get active connector instances: {str(e)}"
+            detail=action_failed("load your connectors")
         ) from e
 
 
@@ -3275,7 +3475,7 @@ async def get_inactive_connector_instances(request: Request) -> dict[str, Any]:
         logger.error(f"Error getting inactive connector instances: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get inactive connector instances: {str(e)}"
+            detail=action_failed("load your connectors")
         ) from e
 
 
@@ -3337,7 +3537,7 @@ async def get_configured_connector_instances(
         logger.error(f"❌ Error getting configured connector instances: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting configured connector instances: {str(e)}"
+            detail=action_failed("load your connectors")
         ) from e
 
 # ============================================================================
@@ -3828,9 +4028,10 @@ async def create_connector_instance(
                 selected_auth_type=selected_auth_type
             )
         except ValueError as e:
+            logger.error("create_connector_instance rejected: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail=str(e)
+                detail=_setup_failure_message(e)
             ) from e
 
         if not instance:
@@ -3932,7 +4133,7 @@ async def create_connector_instance(
         logger.error(f"Error creating connector instance: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to create connector instance: {str(e)}"
+            detail=action_failed("set up this connector")
         ) from e
 
 
@@ -3981,7 +4182,7 @@ async def get_connector_instance(
             logger.error(f"Connector instance {connector_id} not found or access denied")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         connector_type = connector.get("type", "")
@@ -4021,7 +4222,7 @@ async def get_connector_instance(
         logger.error(f"❌ Error getting connector instance: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting connector instance: {str(e)}"
+            detail=action_failed("load this connector")
         ) from e
 
 @router.get("/api/v1/connectors/{connector_id}/config", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ))])
@@ -4070,7 +4271,7 @@ async def get_connector_instance_config(
             logger.error(f"Connector instance {connector_id} not found or access denied")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         connector_type = instance.get("type", "")
@@ -4141,226 +4342,8 @@ async def get_connector_instance_config(
         logger.error(f"Error getting config for instance {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get connector configuration: {str(e)}"
+            detail=action_failed("load this connector's settings")
         ) from e
-
-
-@router.post(
-    "/api/v1/connectors/{connector_id}/file-events/upload",
-    dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_SYNC))],
-    response_model=LocalFsFileEventSubmissionResponse,
-)
-async def submit_connector_file_event_uploads(
-    connector_id: str,
-    request: Request,
-    graph_provider: IGraphDBProvider = Depends(get_graph_provider),
-) -> LocalFsFileEventSubmissionResponse:
-    """
-    Submit Local FS file events with uploaded file bytes.
-
-    Request format:
-    - Content-Type: multipart/form-data
-    - Required `manifest` part containing JSON for `LocalFsFileEventBatchRequest`
-    - Optional file parts keyed by each event's `contentField`
-
-    Response:
-    - `LocalFsFileEventSubmissionResponse` with submission metadata and stats.
-
-    Raises:
-    - 401: user is not authenticated
-    - 404: connector instance not found / not accessible
-    - 400: connector is not Local FS
-    - 422/413: invalid manifest or oversized payload
-    - 500: connector processing failed
-    """
-    container = request.app.container
-    logger = container.logger()
-    connector_registry = request.app.state.connector_registry
-    user_id = request.state.user.get("userId")
-    org_id = request.state.user.get("orgId")
-    is_admin = is_request_admin(request)
-    payload, files_by_field = await _parse_local_fs_uploaded_file_event_batch_request(request)
-
-    if not user_id or not org_id:
-        raise HTTPException(
-            status_code=HttpStatusCode.UNAUTHORIZED.value,
-            detail="User not authenticated",
-        )
-
-    instance = await connector_registry.get_connector_instance(
-        connector_id=connector_id,
-        user_id=user_id,
-        org_id=org_id,
-        is_admin=is_admin,
-    )
-    if not instance:
-        raise HTTPException(
-            status_code=HttpStatusCode.NOT_FOUND.value,
-            detail=f"Connector instance {connector_id} not found or access denied",
-        )
-
-    connector_type = str(instance.get("type", ""))
-    _ct_norm = _normalize_connector_type_value(connector_type)
-    if _ct_norm != "localfs":
-        raise HTTPException(
-            status_code=HttpStatusCode.BAD_REQUEST.value,
-            detail="File event replay is only supported for Local FS connectors",
-        )
-
-    await _update_connector_status(graph_provider, connector_id, AppStatus.SYNCING.value)
-    try:
-        connector = await _ensure_connector_initialized(
-            container,
-            connector_id,
-            connector_type,
-            connector_registry,
-            graph_provider,
-            user_id,
-            org_id,
-            is_admin=is_admin,
-            logger=logger,
-        )
-        if not isinstance(connector, LocalFsConnector):
-            raise HTTPException(
-                status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail="Initialized connector is not a Local FS connector",
-            )
-
-        try:
-            stats = await connector.apply_uploaded_file_event_batch(
-                payload.events,
-                files_by_field,
-                reset_before_apply=payload.resetBeforeApply,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "Local FS uploaded file-event batch failed: connector=%s batch=%s",
-                connector_id,
-                payload.batchId,
-            )
-            raise HTTPException(
-                status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-                detail=f"Local FS file-event batch failed: {exc}",
-            ) from exc
-        return LocalFsFileEventSubmissionResponse(
-            success=True,
-            connectorId=connector_id,
-            batchId=payload.batchId,
-            stats=stats,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            await _update_connector_status(graph_provider, connector_id, AppStatus.IDLE.value)
-
-
-@router.post(
-    "/api/v1/connectors/{connector_id}/file-events",
-    dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_SYNC))],
-    response_model=LocalFsFileEventSubmissionResponse,
-)
-async def submit_connector_file_events(
-    connector_id: str,
-    request: Request,
-    graph_provider: IGraphDBProvider = Depends(get_graph_provider),
-) -> LocalFsFileEventSubmissionResponse:
-    """
-    Submit Local FS file events as JSON metadata only.
-
-    Request format:
-    - Content-Type: application/json
-    - Body must match `LocalFsFileEventBatchRequest` (directly or wrapped payload)
-
-    Response:
-    - `LocalFsFileEventSubmissionResponse` with submission metadata and stats.
-
-    Raises:
-    - 401: user is not authenticated
-    - 404: connector instance not found / not accessible
-    - 400: connector is not Local FS
-    - 422/413: invalid batch payload or oversized event batch
-    - 500: connector processing failed
-    """
-    container = request.app.container
-    logger = container.logger()
-    connector_registry = request.app.state.connector_registry
-    user_id = request.state.user.get("userId")
-    org_id = request.state.user.get("orgId")
-    is_admin = is_request_admin(request)
-    payload = await _parse_local_fs_file_event_batch_request(request)
-
-    if not user_id or not org_id:
-        raise HTTPException(
-            status_code=HttpStatusCode.UNAUTHORIZED.value,
-            detail="User not authenticated",
-        )
-
-    instance = await connector_registry.get_connector_instance(
-        connector_id=connector_id,
-        user_id=user_id,
-        org_id=org_id,
-        is_admin=is_admin,
-    )
-    if not instance:
-        raise HTTPException(
-            status_code=HttpStatusCode.NOT_FOUND.value,
-            detail=f"Connector instance {connector_id} not found or access denied",
-        )
-
-    connector_type = str(instance.get("type", ""))
-    _ct_norm = _normalize_connector_type_value(connector_type)
-    if _ct_norm != "localfs":
-        raise HTTPException(
-            status_code=HttpStatusCode.BAD_REQUEST.value,
-            detail="File event replay is only supported for Local FS connectors",
-        )
-
-    await _update_connector_status(graph_provider, connector_id, AppStatus.SYNCING.value)
-    try:
-        connector = await _ensure_connector_initialized(
-            container,
-            connector_id,
-            connector_type,
-            connector_registry,
-            graph_provider,
-            user_id,
-            org_id,
-            is_admin=is_admin,
-            logger=logger,
-        )
-        if not isinstance(connector, LocalFsConnector):
-            raise HTTPException(
-                status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail="Initialized connector is not a Local FS connector",
-            )
-
-        try:
-            stats = await connector.apply_file_event_batch(
-                payload.events,
-                reset_before_apply=payload.resetBeforeApply,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "Local FS file-event batch failed: connector=%s batch=%s",
-                connector_id,
-                payload.batchId,
-            )
-            raise HTTPException(
-                status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-                detail=f"Local FS file-event batch failed: {exc}",
-            ) from exc
-        return LocalFsFileEventSubmissionResponse(
-            success=True,
-            connectorId=connector_id,
-            batchId=payload.batchId,
-            stats=stats,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            await _update_connector_status(graph_provider, connector_id, AppStatus.IDLE.value)
 
 
 @router.put("/api/v1/connectors/{connector_id}/config/auth", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_WRITE)), Depends(require_connector_not_locked)])
@@ -4671,7 +4654,8 @@ async def update_connector_instance_auth_config(
             ConnectorStateKeys.IS_AUTHENTICATED: False,  # Will be set to True after successful toggle/enable
             ConnectorStateKeys.IS_ACTIVE: False,  # Disable if auth config changed - user must re-enable
             ConnectorStateKeys.UPDATED_AT_TIMESTAMP: get_epoch_timestamp_in_ms(),
-            ConnectorStateKeys.UPDATED_BY: user_id
+            ConnectorStateKeys.UPDATED_BY: user_id,
+            ConnectorStateKeys.AUTHENTICATED_BY: user_id,
         }
         updated_instance = await connector_registry.update_connector_instance(
             connector_id=connector_id,
@@ -4699,7 +4683,7 @@ async def update_connector_instance_auth_config(
         logger.error(f"Error updating auth config for instance {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to update connector authentication configuration: {str(e)}"
+            detail=action_failed("save this connector's sign-in details")
         ) from e
 
 
@@ -4753,6 +4737,7 @@ async def update_connector_instance_filters_sync_config(
 
         # Trim whitespace from config values before processing
         body = _trim_connector_config(body)
+        _require_filter_sections_are_objects(body.get("filters"))
 
         # Validation: Connector must be disabled
         if instance.get("isActive"):
@@ -4794,6 +4779,11 @@ async def update_connector_instance_filters_sync_config(
             for key in ["sync", "indexing"]:
                 if key in body["filters"]:
                     new_config["filters"][key] = body["filters"][key]
+
+        if isinstance((body.get("filters") or {}).get("sync"), dict):
+            await _validate_sync_filter_selections(
+                connector_registry, instance.get("type", ""), new_config, "saving"
+            )
 
         # Only delete sync points and edges when sync filters change
         new_sync_filters = new_config.get("filters", {}).get("sync", {})
@@ -4847,7 +4837,7 @@ async def update_connector_instance_filters_sync_config(
         logger.error(f"Error updating filters-sync config for instance {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to update connector filters and sync configuration: {str(e)}"
+            detail=action_failed("save what this connector syncs")
         ) from e
 
 
@@ -4894,6 +4884,7 @@ async def update_connector_instance_config(
 
         # Trim whitespace from config values before processing
         body = _trim_connector_config(body)
+        _require_filter_sections_are_objects(body.get("filters"))
 
         # Prevent saving configuration when connector is active
         # Only allow filter/sync updates when connector is active (these don't require re-initialization)
@@ -4954,6 +4945,10 @@ async def update_connector_instance_config(
                     # Section doesn't exist, add it
                     new_config[section] = body[section]
 
+        if isinstance((body.get("filters") or {}).get("sync"), dict):
+            await _validate_sync_filter_selections(
+                connector_registry, instance.get("type", ""), new_config, "saving"
+            )
 
         # Clear credentials and OAuth state only if auth config is being updated
         # Filters and sync updates don't require re-authentication
@@ -5016,7 +5011,7 @@ async def update_connector_instance_config(
                         logger.error(f"Error fetching OAuth config {oauth_config_id}: {e}")
                         raise HTTPException(
                             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-                            detail=f"Failed to fetch OAuth configuration: {str(e)}"
+                            detail=action_failed("save this connector's settings")
                         ) from e
 
                 metadata = await connector_registry.get_connector_metadata(connector_type)
@@ -5098,7 +5093,8 @@ async def update_connector_instance_config(
                 "isAuthenticated": False,  # Will be set to True after successful toggle/enable
                 "isActive": False,  # Disable if auth config changed - user must re-enable
                 "updatedAtTimestamp": get_epoch_timestamp_in_ms(),
-                "updatedBy": user_id
+                "updatedBy": user_id,
+                ConnectorStateKeys.AUTHENTICATED_BY: user_id,
             }
         else:
             # For filters/sync updates, keep connector active and authenticated
@@ -5134,7 +5130,7 @@ async def update_connector_instance_config(
         logger.error(f"Error updating config for instance {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to update connector configuration: {str(e)}"
+            detail=action_failed("save this connector's settings")
         ) from e
 
 @router.put("/api/v1/connectors/{connector_id}/name", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_WRITE)), Depends(require_connector_not_locked)])
@@ -5187,7 +5183,7 @@ async def update_connector_instance_name(
             logger.error(f"Connector instance {connector_id} not found or access denied")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         connector_type = instance.get("type", "")
@@ -5229,7 +5225,7 @@ async def update_connector_instance_name(
             logger.error(f"Name uniqueness validation failed: {str(e)}")
             raise HTTPException(
                 status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail=str(e)
+                detail=NAME_TAKEN
             ) from e
 
         if not updated:
@@ -5255,7 +5251,7 @@ async def update_connector_instance_name(
         logger.error(f"Error updating instance name for {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to update connector instance name: {str(e)}"
+            detail=action_failed("rename this connector")
         ) from e
 
 
@@ -5390,7 +5386,7 @@ async def _get_and_validate_connector_instance(
         logger.error(f"Connector instance {connector_id} not found or access denied")
         raise HTTPException(
             status_code=HttpStatusCode.NOT_FOUND.value,
-            detail=f"Connector instance {connector_id} not found or access denied"
+            detail=not_found("This connector")
         )
 
     return instance
@@ -5725,7 +5721,7 @@ async def get_oauth_authorization_url(
         if not instance:
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         connector_type = instance.get("type", "").replace(" ", "").upper()
@@ -5845,7 +5841,7 @@ async def get_oauth_authorization_url(
         logger.error(f"Error generating OAuth URL for {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to generate OAuth URL: {str(e)}"
+            detail=action_failed("start sign-in for this connector")
         ) from e
 
 
@@ -6085,8 +6081,10 @@ async def handle_oauth_callback(
             logger.error(f"❌ Could not schedule token refresh for {connector_id}: {sched_err}", exc_info=True)
 
         # Update instance authentication status
+        # The user completing the consent is the one whose source account the token belongs to
         updates = {
             "isAuthenticated": True,
+            ConnectorStateKeys.AUTHENTICATED_BY: user_id,
             "updatedAtTimestamp": get_epoch_timestamp_in_ms()
         }
         await connector_registry.update_connector_instance(
@@ -6493,7 +6491,7 @@ async def get_connector_instance_filters(
         logger.error(f"Error getting filter options for {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get filter options: {str(e)}"
+            detail=action_failed("load what this connector syncs")
         ) from e
 
 @router.get("/api/v1/connectors/{connector_id}/filters/{filter_key}/options", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ))])
@@ -6680,7 +6678,7 @@ async def get_filter_field_options(
         # Raise as HTTP 500 for proper error tracking and monitoring
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get filter options: {str(e)}"
+            detail=action_failed("load the options for this filter")
         ) from e
 
 
@@ -6799,7 +6797,7 @@ async def save_connector_instance_filters(
         logger.error(f"Error saving filter selections for {connector_id}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to save filter selections: {str(e)}"
+            detail=action_failed("save what this connector syncs")
         ) from e
 
 
@@ -6823,6 +6821,7 @@ async def _get_streaming_connector(
     if hasattr(container, "connectors_map"):
         connector_obj = container.connectors_map.get(connector_id)
     if connector_obj:
+        _tag_instance_name(connector_obj, connector_display_name)
         return connector_obj
 
     if not connector_instance.get("isActive", False):
@@ -6867,7 +6866,20 @@ async def _get_streaming_connector(
                 "Enable it from Connector Settings and try again."
             ),
         )
+    _tag_instance_name(connector_obj, connector_display_name)
     return connector_obj
+
+
+def _tag_instance_name(connector_obj: BaseConnector, name: str | None) -> None:
+    """Give the connector the user's name for *this* connection.
+
+    Connector objects are cached per connector_id in ``connectors_map``, so
+    several instances of one type share a class but not an identity — a
+    Collections error has to say "Engineering Docs", not "Collections".
+    Assignment is idempotent and picks up renames on the next request.
+    """
+    if name and name != "connector":
+        connector_obj.instance_name = name
 
 
 async def _ensure_connector_initialized(
@@ -7002,7 +7014,7 @@ async def _build_and_store_connector(
         except ConnectorInitError as init_error:
             # Connector surfaced a specific, actionable reason (e.g. multi-site OAuth
             # ambiguity). Show it to the user instead of the generic message.
-            error_msg = str(init_error)
+            error_msg = str(init_error)  # user-written message
             logger.error(f"❌ {error_msg}")
             with contextlib.suppress(Exception):
                 await connector.cleanup()
@@ -7037,7 +7049,7 @@ async def _build_and_store_connector(
                     detail=error_msg
                 )
         except ConnectorInitError as init_error:
-            error_msg = str(init_error)
+            error_msg = str(init_error)  # user-written message
             logger.error(f"❌ {error_msg}")
             with contextlib.suppress(Exception):
                 await connector.cleanup()
@@ -7048,14 +7060,15 @@ async def _build_and_store_connector(
         except HTTPException:
             raise
         except Exception as test_error:
-            error_msg = f"Connection test failed: {str(test_error)}"
-            logger.error(f"❌ {error_msg}", exc_info=True)
+            logger.error(
+                "❌ Connection test failed for connector %s", connector_id, exc_info=True
+            )
             # Cleanup on failure
             with contextlib.suppress(Exception):
                 await connector.cleanup()
             raise HTTPException(
                 status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-                detail=error_msg
+                detail=action_failed("connect to this connector")
             ) from test_error
 
         # Success! Store connector in container
@@ -7078,11 +7091,10 @@ async def _build_and_store_connector(
     except HTTPException:
         raise
     except Exception as e:
-        error_msg = f"Failed to initialize connector: {str(e)}"
-        logger.error(f"❌ {error_msg}", exc_info=True)
+        logger.error("❌ Failed to initialize connector", exc_info=True)
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=error_msg
+            detail=action_failed("connect to this connector")
         ) from e
 
 
@@ -7129,7 +7141,7 @@ async def toggle_connector_instance(
             logger.error(f"Toggle type is required and must be 'sync' or 'agent'. Got {toggle_type}")
             raise HTTPException(
                 status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail="Toggle type is required and must be 'sync' or 'agent'. Got {toggle_type}"
+                detail="Choose whether to turn syncing or the agent on or off, then try again."
             )
 
         logger.info(f"Toggling connector instance {connector_id} {toggle_type} status")
@@ -7166,7 +7178,7 @@ async def toggle_connector_instance(
             logger.error(f"Connector instance {connector_id} not found or access denied")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         current_sync_status = instance["isActive"]
@@ -7202,6 +7214,7 @@ async def toggle_connector_instance(
             target_status = not current_agent_status
             status_field = "isAgentActive"
 
+        owner_updates: dict[str, Any] = {}
         # Validate prerequisites when enabling
         if toggle_type == "sync" and not current_sync_status:
             auth_type = (instance.get("authType") or "").upper()
@@ -7244,6 +7257,14 @@ async def toggle_connector_instance(
                         detail="Connector must be configured before enabling"
                     )
 
+            await _validate_sync_filter_selections(
+                connector_registry, instance.get("type", ""), config or {}, "enabling this connector"
+            )
+
+            # add owner fields to the instance if local fs connector
+            if _is_local_fs_connector_type(connector_type):
+                owner_updates = _local_fs_owner_claim(connector_id, instance, body)
+
             # Initialize connector when enabling (if not already initialized)
             await _ensure_connector_initialized(
                 container=container,
@@ -7277,7 +7298,8 @@ async def toggle_connector_instance(
         updates = {
             status_field: target_status,
             "updatedAtTimestamp": get_epoch_timestamp_in_ms(),
-            "updatedBy": user_id
+            "updatedBy": user_id,
+            **owner_updates,
         }
 
         success = await connector_registry.update_connector_instance(
@@ -7344,7 +7366,7 @@ async def toggle_connector_instance(
         logger.error(f"Failed to toggle connector instance {connector_id} {toggle_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to toggle connector instance {connector_id} {toggle_type}: {str(e)}"
+            detail=action_failed("turn this connector on or off")
         ) from e
 
 
@@ -7395,7 +7417,7 @@ async def delete_connector_instance(
             logger.error(f"Connector instance {connector_id} not found or access denied")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail=f"Connector instance {connector_id} not found or access denied"
+                detail=not_found("This connector")
             )
 
         connector_type = instance.get("type", "")
@@ -7630,7 +7652,7 @@ async def get_connector_schema(
         logger.error(f"Error getting schema for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get connector schema: {str(e)}"
+            detail=action_failed("load this connector's setup form")
         ) from e
 
 @router.get("/api/v1/connectors/agents/active", dependencies=[Depends(require_scopes(OAuthScopes.CONNECTOR_READ))])
@@ -7692,7 +7714,7 @@ async def get_active_agent_instances(
         logger.error(f"Error getting active agent instances: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get active agent instances: {str(e)}"
+            detail=action_failed("load your agents")
         ) from e
 
 
@@ -7754,7 +7776,7 @@ async def get_oauth_config_registry(
         logger.error(f"Error getting OAuth config registry: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting OAuth config registry: {str(e)}"
+            detail=action_failed("load the list of sign-in apps")
         ) from e
 
 
@@ -7812,7 +7834,7 @@ async def get_oauth_config_registry_by_type(
         logger.error(f"Error getting OAuth config registry for {connector_type}: {str(e)}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Error getting OAuth config registry: {str(e)}"
+            detail=action_failed("load the list of sign-in apps")
         ) from e
 
 
@@ -7955,7 +7977,7 @@ async def get_all_oauth_configs(
         logger.error(f"Error getting all OAuth configs: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get all OAuth configurations: {str(e)}"
+            detail=action_failed("load your sign-in apps")
         ) from e
 
 
@@ -8559,7 +8581,7 @@ async def create_oauth_config(
         logger.error(f"Error creating OAuth config for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to create OAuth configuration: {str(e)}"
+            detail=action_failed("save this sign-in app")
         ) from e
 
 
@@ -8644,7 +8666,7 @@ async def list_oauth_configs(
         logger.error(f"Error listing OAuth configs for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to list OAuth configurations: {str(e)}"
+            detail=action_failed("load your sign-in apps")
         ) from e
 
 
@@ -8738,7 +8760,7 @@ async def get_oauth_config_by_id(
         logger.error(f"Error getting OAuth config {config_id} for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to get OAuth configuration: {str(e)}"
+            detail=action_failed("load this sign-in app")
         ) from e
 
 
@@ -8854,7 +8876,7 @@ async def update_oauth_config(
         logger.error(f"Error updating OAuth config {config_id} for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to update OAuth configuration: {str(e)}"
+            detail=action_failed("save this sign-in app")
         ) from e
 
 
@@ -8937,5 +8959,5 @@ async def delete_oauth_config(
         logger.error(f"Error deleting OAuth config {config_id} for {connector_type}: {e}")
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to delete OAuth configuration: {str(e)}"
+            detail=action_failed("delete this sign-in app")
         ) from e

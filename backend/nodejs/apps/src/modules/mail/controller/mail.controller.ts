@@ -1,8 +1,13 @@
 import { NextFunction, Request, Response } from 'express';
 import {
+  BadRequestError,
   InternalServerError,
   NotFoundError,
 } from '../../../libs/errors/http.errors';
+import {
+  markClientSafe,
+  serverFailureMessage,
+} from '../../../libs/errors/reader-friendly';
 import { EmailTemplateType, MailBody, SmtpConfig } from '../middlewares/types';
 import { MailModel } from '../schema/mailInfo.schema';
 import {
@@ -12,6 +17,8 @@ import {
   loginWithOTPRequest,
   orgEmailVerification,
   resetEmail,
+  emailChangeNotice,
+  isEmailChangeNoticeData,
   resetPassword,
   suspiciousLoginAttempt,
   joinRequestNotify,
@@ -40,7 +47,11 @@ export class MailController {
       }
       result = await this.emailSender(body, this.config.smtp);
       if (!result.status) {
-        throw new InternalServerError(result.data || 'Error sending mail');
+        // `data` is the mail library's own complaint, packed in by emailSender.
+        this.logger.error('Sending the email failed', { reason: result.data });
+        throw markClientSafe(
+          new InternalServerError(serverFailureMessage('send that email')),
+        );
       }
       res.status(200).json({
         data: result,
@@ -74,6 +85,16 @@ export class MailController {
         return emailContent;
       case EmailTemplateType.ResetEmail:
         emailContent = resetEmail(templateData);
+        return emailContent;
+      case EmailTemplateType.EmailChangeNotice:
+        // The notice names the person and the new address; a caller that
+        // omits either would render a blank where a reader expects a fact.
+        if (!isEmailChangeNoticeData(templateData)) {
+          throw new BadRequestError(
+            'emailChangeNotice requires name, orgName and newEmail',
+          );
+        }
+        emailContent = emailChangeNotice(templateData);
         return emailContent;
 
       case EmailTemplateType.AppuserInvite:

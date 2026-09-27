@@ -6,10 +6,65 @@ obtain_local_oauth_credentials(base_url) to log in with a test user (org admin),
 create an OAuth app with client_credentials grant, and return (client_id, client_secret).
 """
 
+import base64
+import json
 import os
 import time
+from typing import Tuple
 
 import requests
+
+
+# Every scope the backend defines (OAuthScopeNames in oauth-scopes.enum.ts):
+# the test client is a full admin. unit/test_local_auth_scopes.py fails when a
+# new backend scope is missing here, instead of the tests using it getting 403s.
+TEST_CLIENT_SCOPES = (
+    "openid",
+    "profile",
+    "email",
+    "offline_access",
+    "org:read",
+    "org:write",
+    "org:admin",
+    "user:read",
+    "user:write",
+    "user:invite",
+    "user:delete",
+    "usergroup:read",
+    "usergroup:write",
+    "team:read",
+    "team:write",
+    "kb:read",
+    "kb:write",
+    "kb:delete",
+    "kb:upload",
+    "semantic:read",
+    "semantic:write",
+    "semantic:delete",
+    "conversation:read",
+    "conversation:write",
+    "conversation:chat",
+    "agent:read",
+    "agent:write",
+    "agent:execute",
+    "connector:read",
+    "connector:write",
+    "connector:sync",
+    "connector:delete",
+    "config:read",
+    "config:write",
+    "crawl:read",
+    "crawl:write",
+    "crawl:delete",
+    "mcp:read",
+    "mcp:write",
+    "mcp:delete",
+    "project:read",
+    "project:write",
+    "project:delete",
+    "skill:read",
+    "skill:write",
+)
 
 
 def obtain_local_oauth_credentials(base_url: str, timeout: int = 30) -> tuple[str, str]:
@@ -18,6 +73,26 @@ def obtain_local_oauth_credentials(base_url: str, timeout: int = 30) -> tuple[st
 
     Requires PIPESHUB_TEST_USER_EMAIL and PIPESHUB_TEST_USER_PASSWORD in the environment.
     The user must be an org admin so that POST /api/v1/oauth-clients succeeds.
+
+    Raises:
+        RuntimeError: If env vars are missing or any backend call fails.
+    """
+    base_url = base_url.rstrip("/")
+    access_token = obtain_user_session_token(base_url, timeout)
+    client_id, client_secret = _create_oauth_app(base_url, access_token, timeout)
+    return client_id, client_secret
+
+
+def obtain_user_session_token(base_url: str, timeout: int = 30) -> str:
+    """
+    Log in as the test user with a password and return an org-scoped session JWT.
+
+    Requires PIPESHUB_TEST_USER_EMAIL and PIPESHUB_TEST_USER_PASSWORD in the environment.
+
+    The open-source backend returns the session JWT from ``authenticate`` directly.
+    The enterprise backend returns an email-verified token plus the auto-login
+    ``orgId`` there, and issues the session JWT from ``POST /api/v1/auth/token/switch``.
+    Both are handled: the token is switched when it carries no ``userId``.
 
     Raises:
         RuntimeError: If env vars are missing or any backend call fails.
@@ -32,9 +107,39 @@ def obtain_local_oauth_credentials(base_url: str, timeout: int = 30) -> tuple[st
         )
 
     session_token = _init_auth(base_url, email, timeout)
-    access_token = _authenticate(base_url, session_token, email, password, timeout)
-    client_id, client_secret = _create_oauth_app(base_url, access_token, timeout)
-    return client_id, client_secret
+    access_token, org_id = _authenticate(base_url, session_token, email, password, timeout)
+    if "userId" not in _jwt_claims(access_token):
+        access_token = _switch_to_org(base_url, access_token, org_id, timeout)
+    return access_token
+
+
+def _jwt_claims(token: str) -> dict:
+    """Decode the JWT payload without verifying it (claims only, no secrets needed)."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except (IndexError, ValueError):
+        return {}
+
+
+def _switch_to_org(base_url: str, email_verified_token: str, org_id: str, timeout: int) -> str:
+    if not org_id:
+        raise RuntimeError(
+            "authenticate returned an email-verified token but no orgId; cannot switch to an org"
+        )
+    resp = requests.post(
+        f"{base_url}/api/v1/auth/token/switch",
+        headers={"Authorization": f"Bearer {email_verified_token}"},
+        json={"orgId": org_id},
+        timeout=timeout,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"auth/token/switch failed: HTTP {resp.status_code} - {resp.text[:200]}")
+    access_token = resp.json().get("accessToken")
+    if not access_token:
+        raise RuntimeError("auth/token/switch did not return accessToken")
+    return access_token
 
 
 def _init_auth(base_url: str, email: str, timeout: int) -> str:
@@ -59,7 +164,8 @@ def _authenticate(
     email: str,
     password: str,
     timeout: int,
-) -> str:
+) -> tuple[str, str]:
+    """Return ``(accessToken, orgId)``; ``orgId`` is empty on the open-source backend."""
     resp = requests.post(
         f"{base_url}/api/v1/userAccount/authenticate",
         headers={"x-session-token": session_token},
@@ -71,7 +177,7 @@ def _authenticate(
         timeout=timeout,
     )
     if resp.status_code >= 400:
-        raise RuntimeError(f"authenticate failed: HTTP {resp.status_code}")
+        raise RuntimeError(f"authenticate failed: HTTP {resp.status_code} - {resp.text[:200]}")
     try:
         data = resp.json()
     except ValueError:
@@ -81,7 +187,7 @@ def _authenticate(
         raise RuntimeError(
             f"authenticate did not return accessToken: {list(data.keys())}"
         )
-    return access_token
+    return access_token, str(data.get("orgId") or "")
 
 
 def _create_oauth_app(
@@ -153,45 +259,7 @@ def _post_oauth_app(
         json={
             "name": "Integration Test Client",
             "allowedGrantTypes": ["client_credentials"],
-            "allowedScopes": [
-                "openid",
-                "profile",
-                "email",
-                "offline_access",
-                "org:read",
-                "org:write",
-                "org:admin",
-                "user:read",
-                "user:write",
-                "user:invite",
-                "user:delete",
-                "usergroup:read",
-                "usergroup:write",
-                "team:read",
-                "team:write",
-                "kb:read",
-                "kb:write",
-                "kb:delete",
-                "kb:upload",
-                "semantic:read",
-                "semantic:write",
-                "semantic:delete",
-                "conversation:read",
-                "conversation:write",
-                "conversation:chat",
-                "agent:read",
-                "agent:write",
-                "agent:execute",
-                "connector:read",
-                "connector:write",
-                "connector:sync",
-                "connector:delete",
-                "config:read",
-                "config:write",
-                "crawl:read",
-                "crawl:write",
-                "crawl:delete",
-            ],
+            "allowedScopes": list(TEST_CLIENT_SCOPES),
         },
         timeout=timeout,
     )

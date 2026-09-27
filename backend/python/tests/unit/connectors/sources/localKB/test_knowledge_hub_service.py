@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.utils.user_messages import action_failed, not_found
 from app.connectors.sources.localKB.handlers.knowledge_hub_service import (
     FOLDER_MIME_TYPES,
+    BrowseRequestError,
     KnowledgeHubService,
     _get_node_type_value,
 )
@@ -198,6 +200,26 @@ class TestRoleToPermission:
 # _doc_to_node_item
 # ============================================================================
 class TestDocToNodeItem:
+    def test_connector_record_keeps_its_connector_instance_id(self, service) -> None:
+        # The UI marks records from the bundled demo connector by this id; the
+        # connector name alone ("SLACK") can't tell demo data from real data.
+        doc = {
+            "id": "rec1", "name": "#eng-payments thread", "nodeType": "record",
+            "origin": "CONNECTOR", "connector": "SLACK", "connectorId": "demo-1",
+            "createdAt": 1, "updatedAt": 2, "hasChildren": False,
+        }
+        item = service._doc_to_node_item(doc)
+        assert item.model_dump()["connectorId"] == "demo-1"
+
+    def test_collection_record_sends_a_null_connector_id(self, service) -> None:
+        # The nodes routes keep every key and send null for what doesn't apply.
+        doc = {
+            "id": "rec2", "name": "notes.md", "nodeType": "record", "origin": "COLLECTION",
+            "connectorId": None, "createdAt": 1, "updatedAt": 2, "hasChildren": False,
+        }
+        dumped = service._doc_to_node_item(doc).model_dump()
+        assert "connectorId" in dumped and dumped["connectorId"] is None
+
     def test_full_doc(self, service):
         doc = {
             "id": "node1",
@@ -569,14 +591,32 @@ class TestGetNodes:
             parent_id="bad_id", parent_type="folder",
         )
         assert result.success is False
-        assert "not found" in result.error.lower()
+        assert result.errorCode == 404
+        assert result.error == not_found("This item")
+        assert "bad_id" not in result.error
+
+    @pytest.mark.asyncio
+    async def test_value_error_from_the_graph_client_is_not_forwarded(
+        self, service, mock_graph_provider
+    ):
+        """The neo4j client raises ValueError for its own failures, not for us."""
+        mock_graph_provider.get_user_by_user_id.side_effect = ValueError(
+            "Transaction 7c1b-41 not found"
+        )
+        result = await service.get_nodes(user_id="u1", org_id="o1")
+        assert result.success is False
+        assert result.errorCode == 500
+        assert result.error == action_failed("open this collection")
+        assert "Transaction" not in result.error
 
     @pytest.mark.asyncio
     async def test_general_exception(self, service, mock_graph_provider):
         mock_graph_provider.get_user_by_user_id.side_effect = RuntimeError("DB down")
         result = await service.get_nodes(user_id="u1", org_id="o1")
         assert result.success is False
-        assert "Failed to retrieve nodes" in result.error
+        # this error reaches the toast through the router, so it says what to do
+        assert result.error == action_failed("open this collection")
+        assert "DB down" not in result.error
 
     @pytest.mark.asyncio
     async def test_pagination_negative_page(self, service, mock_graph_provider):
@@ -614,14 +654,20 @@ class TestValidateNodeExistenceAndType:
     @pytest.mark.asyncio
     async def test_node_not_found(self, service, mock_graph_provider):
         mock_graph_provider.get_knowledge_hub_node_info.return_value = None
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(BrowseRequestError) as raised:
             await service._validate_node_existence_and_type("n1", "folder", "uk", "o1")
+        assert raised.value.status_code == 404
+        assert raised.value.message == not_found("This item")
 
     @pytest.mark.asyncio
     async def test_type_mismatch(self, service, mock_graph_provider):
         mock_graph_provider.get_knowledge_hub_node_info.return_value = {"nodeType": "app"}
-        with pytest.raises(ValueError, match="type mismatch"):
+        with pytest.raises(BrowseRequestError) as raised:
             await service._validate_node_existence_and_type("n1", "folder", "uk", "o1")
+        assert raised.value.status_code == 400
+        # the id, the node types and the API path stay in the log
+        assert "n1" not in raised.value.message
+        assert "nodes/" not in raised.value.message
 
     @pytest.mark.asyncio
     async def test_type_matches(self, service, mock_graph_provider):

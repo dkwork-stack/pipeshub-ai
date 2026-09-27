@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from dropbox.exceptions import ApiError
+from fastapi import HTTPException
 from dropbox.files import DeletedMetadata, FileMetadata, FolderMetadata
 from dropbox.sharing import AccessLevel
 from dropbox.team_log import EventCategory
@@ -898,8 +899,10 @@ class TestHandleRecordUpdates:
         update.is_new = False
         update.is_updated = False
         update.external_record_id = "ext-1"
+        connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         await connector._handle_record_updates(update)
-        connector.data_entities_processor.on_record_deleted.assert_called_once_with(record_id="ext-1")
+        connector.data_entities_processor.get_record_by_external_id.assert_awaited_once_with(connector.connector_id, "ext-1")
+        connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
     async def test_metadata_changed(self, connector):
         update = MagicMock()
@@ -942,8 +945,10 @@ class TestHandleRecordUpdates:
         update = MagicMock()
         update.is_deleted = True
         update.external_record_id = "ext-1"
+        connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         connector.data_entities_processor.on_record_deleted = AsyncMock(side_effect=Exception("DB error"))
         await connector._handle_record_updates(update)  # Should not raise
+        connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 # ===========================================================================
@@ -1173,8 +1178,22 @@ class TestDropboxHandleRecordUpdates:
             permissions_changed=False,
             external_record_id="ext-1",
         )
+        dropbox_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         await dropbox_connector._handle_record_updates(update)
-        dropbox_connector.data_entities_processor.on_record_deleted.assert_awaited_once()
+        dropbox_connector.data_entities_processor.get_record_by_external_id.assert_awaited_once_with(dropbox_connector.connector_id, "ext-1")
+        dropbox_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
+
+    @pytest.mark.asyncio
+    async def test_deleted_record_never_indexed(self, dropbox_connector):
+        update = RecordUpdate(
+            record=None, is_new=False, is_updated=False, is_deleted=True,
+            metadata_changed=False, content_changed=False, permissions_changed=False,
+            external_record_id="ext-404",
+        )
+        dropbox_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=None)
+        dropbox_connector.data_entities_processor.on_record_deleted = AsyncMock()
+        await dropbox_connector._handle_record_updates(update)
+        dropbox_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
 
     async def test_metadata_changed(self, dropbox_connector):
         mock_record = MagicMock()
@@ -1237,10 +1256,12 @@ class TestDropboxHandleRecordUpdates:
             permissions_changed=False,
             external_record_id="ext-1",
         )
+        dropbox_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         dropbox_connector.data_entities_processor.on_record_deleted = AsyncMock(
             side_effect=Exception("DB error")
         )
         await dropbox_connector._handle_record_updates(update)  # Should not raise
+        dropbox_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
     async def test_new_record_no_action(self, dropbox_connector):
         mock_record = MagicMock()
@@ -4391,16 +4412,22 @@ class TestGetSignedUrl:
     async def test_no_data_source(self, connector):
         connector.data_source = None
         record = MagicMock(id="r1")
-        result = await connector.get_signed_url(record)
-        assert result is None
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await connector.get_signed_url(record)
+        assert exc_info.value.status_code == 409
+        assert "not connected" in exc_info.value.detail
 
     async def test_no_user_with_permission(self, connector):
         record = MagicMock(id="r1")
         connector.data_entities_processor.get_first_user_with_permission_to_node = AsyncMock(return_value=None)
         connector.data_entities_processor.get_file_record_by_id = AsyncMock(return_value=MagicMock(path="/file.pdf"))
 
-        result = await connector.get_signed_url(record)
-        assert result is None
+        # A local metadata gap, not a file deleted at Dropbox.
+        with pytest.raises(HTTPException) as exc_info:
+            await connector.get_signed_url(record)
+        assert exc_info.value.status_code == 422
 
     async def test_no_file_record(self, connector):
         record = MagicMock(id="r1")
@@ -4408,8 +4435,9 @@ class TestGetSignedUrl:
         connector.data_entities_processor.get_first_user_with_permission_to_node = AsyncMock(return_value=user)
         connector.data_entities_processor.get_file_record_by_id = AsyncMock(return_value=None)
 
-        result = await connector.get_signed_url(record)
-        assert result is None
+        with pytest.raises(HTTPException) as exc_info:
+            await connector.get_signed_url(record)
+        assert exc_info.value.status_code == 422
 
     async def test_success(self, connector):
         record = MagicMock(id="r1", external_record_group_id="ns:1")
@@ -4457,8 +4485,11 @@ class TestGetSignedUrl:
         record = MagicMock(id="r1")
         connector.data_entities_processor.get_first_user_with_permission_to_node = AsyncMock(side_effect=Exception("DB error"))
 
-        result = await connector.get_signed_url(record)
-        assert result is None
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await connector.get_signed_url(record)
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Could not retrieve this item. Please try again."
 
 
 # ===========================================================================

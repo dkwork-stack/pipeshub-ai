@@ -1,12 +1,11 @@
 import { NextFunction, Router, Response } from 'express';
 import { Container } from 'inversify';
 import multer from 'multer';
+import { createMulter } from '../../../libs/utils/multer.utils';
 import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
 import {
-  addMessage,
   archiveConversation,
   archiveSearch,
-  createConversation,
   deleteConversationById,
   deleteSearchById,
   deleteSearchHistory,
@@ -30,10 +29,8 @@ import {
   uploadChatAttachmentsInternal,
   deleteChatAttachment,
   addMessageStream,
-  createAgentConversation,
   streamAgentConversation,
   streamAgentConversationInternal,
-  addMessageToAgentConversation,
   addMessageStreamToAgentConversation,
   addMessageStreamToAgentConversationInternal,
   getAllAgentConversations,
@@ -47,6 +44,8 @@ import {
   getWebSearchProviderUsage,
   getModelUsage,
   regenerateAgentAnswers,
+  cancelConversationStream,
+  cancelAgentConversationStream,
   streamChatInternal,
   addMessageStreamInternal,
   updateAgentConversationTitle,
@@ -56,7 +55,15 @@ import {
   listAllArchivesAgentConversation,
   listAllAgentsArchivedConversationsGrouped,
   searchArchivedConversations,
+  setConversationProject,
+  setConversationProjectVisibility,
 } from '../controller/es_controller';
+import {
+  addMessage,
+  addMessageToAgentConversation,
+  createAgentConversation,
+  createConversation,
+} from '../controller/non-streaming-chat.controller';
 import {
   getSpeechCapabilities,
   synthesizeSpeech,
@@ -74,7 +81,13 @@ import {
   addMessageStreamParamsSchema,
   conversationShareParamsSchema,
   conversationTitleParamsSchema,
+  conversationProjectLinkSchema,
+  conversationProjectVisibilitySchema,
+  agentConversationProjectLinkSchema,
+  agentConversationProjectVisibilitySchema,
   regenerateAnswersParamsSchema,
+  cancelConversationStreamParamsSchema,
+  cancelAgentConversationStreamParamsSchema,
   updateFeedbackParamsSchema,
   searchShareParamsSchema,
   regenerateAgentAnswersParamsSchema,
@@ -84,6 +97,8 @@ import {
   updateAgentFeedbackParamsSchema,
   agentStreamCreateSchema,
   agentAddMessageParamsSchema,
+  agentCreateConversationSchema,
+  agentAddMessageSchema,
   getAllConversationsQuerySchema,
   getAllAgentConversationsQuerySchema,
   listAllArchivesConversationQuerySchema,
@@ -109,20 +124,22 @@ import { AuthenticatedServiceRequest } from '../../../libs/middlewares/types';
 import { requireScopes } from '../../../libs/middlewares/require-scopes.middleware';
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
 import { KeyValueStoreService } from '../../../libs/services/keyValueStore.service';
+import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 
 /** Max bytes per file for chat attachment uploads (PDF/JPEG/PNG). Aligned with frontend, Slack, and Python. */
 const CHAT_ATTACHMENT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 export function createConversationalRouter(container: Container): Router {
   const router = Router();
+  guardPathParams(router, 'recordId');
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   let appConfig = container.get<AppConfig>('AppConfig');
-  const chatPdfUpload = multer({
+  const chatPdfUpload = createMulter({
     storage: multer.memoryStorage(),
     limits: { fileSize: CHAT_ATTACHMENT_UPLOAD_MAX_BYTES, files: 10 },
   });
 
-  const internalAttachmentUpload = multer({
+  const internalAttachmentUpload = createMulter({
     storage: multer.memoryStorage(),
     limits: { fileSize: CHAT_ATTACHMENT_UPLOAD_MAX_BYTES, files: 10 },
   });
@@ -298,7 +315,7 @@ export function createConversationalRouter(container: Container): Router {
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.CONVERSATION_READ),
     ValidationMiddleware.validate(conversationIdParamsSchema),
-    getConversationById,
+    getConversationById(appConfig),
   );
 
   /**
@@ -347,6 +364,30 @@ export function createConversationalRouter(container: Container): Router {
   );
 
   /**
+   * @route PUT /api/v1/conversations/:conversationId/project
+   * @desc Link (or, with `projectId: null`, unlink) a conversation to a project. Initiator-only.
+   */
+  router.put(
+    '/:conversationId/project',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_WRITE),
+    ValidationMiddleware.validate(conversationProjectLinkSchema),
+    setConversationProject,
+  );
+
+  /**
+   * @route PATCH /api/v1/conversations/:conversationId/project-visibility
+   * @desc Override whether this project-linked conversation is visible to other project members.
+   */
+  router.patch(
+    '/:conversationId/project-visibility',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_WRITE),
+    ValidationMiddleware.validate(conversationProjectVisibilitySchema),
+    setConversationProjectVisibility,
+  );
+
+  /**
    * @route POST /api/v1/conversations/:conversationId/message/:messageId/regenerate
    * @desc Regenerate message by ID
    * @access Private
@@ -359,6 +400,21 @@ export function createConversationalRouter(container: Container): Router {
     requireScopes(OAuthScopeNames.CONVERSATION_CHAT),
     ValidationMiddleware.validate(regenerateAnswersParamsSchema),
     regenerateAnswers(appConfig),
+  );
+
+  /**
+   * @route POST /api/v1/conversations/:conversationId/cancel
+   * @desc Cooperatively stop an in-flight assistant chat stream
+   * @access Private
+   * @param {string} conversationId - Conversation ID
+   * @body { runId: string (UUID) }
+   */
+  router.post(
+    '/:conversationId/cancel',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_CHAT),
+    ValidationMiddleware.validate(cancelConversationStreamParamsSchema),
+    cancelConversationStream(appConfig),
   );
 
   /**
@@ -544,7 +600,6 @@ export function createSemanticSearchRouter(container: Container): Router {
 
         res.status(200).json({
           message: 'User configuration updated successfully',
-          config: appConfig,
         });
         return;
       } catch (error) {
@@ -558,13 +613,14 @@ export function createSemanticSearchRouter(container: Container): Router {
 
 export function createAgentConversationalRouter(container: Container): Router {
   const router = Router();
+  guardPathParams(router, 'agentKey', 'recordId', 'provider', 'model_key');
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   let appConfig = container.get<AppConfig>('AppConfig');
   const keyValueStoreService = container.isBound('KeyValueStoreService')
     ? container.get<KeyValueStoreService>('KeyValueStoreService')
     : undefined;
 
-  const agentAttachmentUpload = multer({
+  const agentAttachmentUpload = createMulter({
     storage: multer.memoryStorage(),
     limits: { fileSize: CHAT_ATTACHMENT_UPLOAD_MAX_BYTES, files: 10 },
   });
@@ -586,6 +642,7 @@ export function createAgentConversationalRouter(container: Container): Router {
     '/:agentKey/conversations',
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.AGENT_EXECUTE),
+    ValidationMiddleware.validate(agentCreateConversationSchema),
     createAgentConversation(appConfig),
   );
 
@@ -601,6 +658,7 @@ export function createAgentConversationalRouter(container: Container): Router {
     '/:agentKey/conversations/:conversationId/messages',
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.AGENT_EXECUTE),
+    ValidationMiddleware.validate(agentAddMessageSchema),
     addMessageToAgentConversation(appConfig),
   );
 
@@ -664,6 +722,22 @@ export function createAgentConversationalRouter(container: Container): Router {
     );
 
   /**
+   * @route POST /api/v1/agents/:agentKey/conversations/:conversationId/cancel
+   * @desc Cooperatively stop an in-flight agent chat stream
+   * @access Private
+   * @param {string} agentKey - Agent key
+   * @param {string} conversationId - Conversation ID
+   * @body { runId: string (UUID) }
+   */
+  router.post(
+    '/:agentKey/conversations/:conversationId/cancel',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.AGENT_EXECUTE),
+    ValidationMiddleware.validate(cancelAgentConversationStreamParamsSchema),
+    cancelAgentConversationStream(appConfig),
+  );
+
+  /**
    * @route POST /api/v1/agents/:agentKey/conversations/:conversationId/message/:messageId/feedback
    * @desc Submit feedback for an agent conversation message
    */
@@ -709,6 +783,30 @@ export function createAgentConversationalRouter(container: Container): Router {
     requireScopes(OAuthScopeNames.AGENT_WRITE),
     ValidationMiddleware.validate(agentConversationTitleParamsSchema),
     updateAgentConversationTitle,
+  );
+
+  /**
+   * @route PUT /api/v1/agents/:agentKey/conversations/:conversationId/project
+   * @desc Link (or unlink) an agent conversation to a project. Initiator-only.
+   */
+  router.put(
+    '/:agentKey/conversations/:conversationId/project',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.AGENT_WRITE),
+    ValidationMiddleware.validate(agentConversationProjectLinkSchema),
+    setConversationProject,
+  );
+
+  /**
+   * @route PATCH /api/v1/agents/:agentKey/conversations/:conversationId/project-visibility
+   * @desc Override whether this project-linked agent conversation is visible to other project members.
+   */
+  router.patch(
+    '/:agentKey/conversations/:conversationId/project-visibility',
+    authMiddleware.authenticate,
+    requireScopes(OAuthScopeNames.AGENT_WRITE),
+    ValidationMiddleware.validate(agentConversationProjectVisibilitySchema),
+    setConversationProjectVisibility,
   );
 
   /**
@@ -828,7 +926,7 @@ export function createChatSpeechRouter(container: Container): Router {
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   const appConfig = container.get<AppConfig>('AppConfig');
 
-  const audioUpload = multer({
+  const audioUpload = createMulter({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_STT_AUDIO_BYTES, files: 1 },
   });

@@ -101,6 +101,15 @@ describe('mail/controller/mail.controller', () => {
       }
     })
 
+    it('renders the email-change notice with the new address and a warning', () => {
+      const content = controller.getEmailContent('emailChangeNotice', {
+        name: 'Alice', orgName: 'Acme', newEmail: 'alice.new@example.com',
+      })
+      expect(content).to.include('alice.new@example.com')
+      expect(content).to.include('was <strong>not</strong> you')
+      expect(content).to.not.include('Verify email')  // a notice, not a link to act on
+    })
+
     it('should return content for SuspiciousLoginAttempt template', () => {
       try {
         const content = controller.getEmailContent('suspiciousLoginAttempt', { ip: '1.2.3.4' })
@@ -260,7 +269,7 @@ describe('mail/controller/mail.controller', () => {
   })
 
   describe('sendMail - error when emailSender returns status false with no data', () => {
-    it('should use fallback error message', async () => {
+    it('answers with a written message either way', async () => {
       sinon.stub(controller, 'emailSender').resolves({ status: false, data: undefined })
       const req: any = { body: {} }
       const res: any = { status: sinon.stub().returnsThis(), json: sinon.stub() }
@@ -270,7 +279,7 @@ describe('mail/controller/mail.controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.equal('Error sending mail')
+      expect(err.message).to.contain('PipesHub tried to send that email')
     })
   })
 })

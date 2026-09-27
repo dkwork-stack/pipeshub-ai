@@ -64,6 +64,7 @@ class NodeItem(BaseModel):
     parentId: Optional[str] = Field(None, description="ID of the parent node")
     origin: OriginType = Field(..., description="Origin type (COLLECTION or CONNECTOR)")
     connector: Optional[str] = Field(None, description="Connector name (only for CONNECTOR origin)")
+    connectorId: Optional[str] = Field(None, description="Connector instance id (only for CONNECTOR origin)")
     recordType: Optional[str] = Field(None, description="Record type (only when nodeType is record)")
     recordGroupType: Optional[str] = Field(None, description="Record group type (only when nodeType is recordGroup, e.g. SLACK_CHANNEL, CONFLUENCE_SPACES)")
     indexingStatus: Optional[str] = Field(None, description="Indexing status (only when nodeType is record)")
@@ -179,6 +180,7 @@ class KnowledgeHubNodesResponse(BaseModel):
     """Response model for the Knowledge Hub nodes API"""
     success: bool = Field(..., description="Whether the request was successful")
     error: Optional[str] = Field(None, description="Error message if success is False")
+    errorCode: Optional[int] = Field(None, description="HTTP status the router answers with when success is False; 4xx means `error` was written for the reader")
     id: Optional[str] = Field(None, description="Current parent node ID (null for root)")
     currentNode: Optional[CurrentNode] = Field(None, description="The node being browsed (when parentId is provided)")
     parentNode: Optional[CurrentNode] = Field(None, description="The parent of currentNode (one level up)")

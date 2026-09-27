@@ -8,6 +8,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.config.constants.arangodb import AppGroups, Connectors, ProgressStatus
 from app.config.constants.http_status_code import HttpStatusCode
@@ -16,6 +17,7 @@ from app.connectors.core.factory.connector_factory import ConnectorFactory
 from app.connectors.core.registry.filters import IndexingFilterKey
 from app.connectors.sources.atlassian.core.apps import JiraDataCenterApp
 from app.connectors.sources.atlassian.jira_data_center.connector import (
+    GroupMemberships,
     JiraDataCenterConnector,
     _normalize_jira_dc_group_row,
 )
@@ -278,8 +280,9 @@ class TestJiraDataCenterFreshDatasource:
     async def test_raises_when_not_initialized(self) -> None:
         conn = _make_connector()
         conn.external_client = None
-        with pytest.raises(RuntimeError, match="not initialized"):
+        with pytest.raises(HTTPException) as exc_info:
             await conn._get_fresh_datasource()
+        assert exc_info.value.status_code == 409
 
     @pytest.mark.asyncio
     async def test_returns_jira_data_source(self) -> None:
@@ -429,7 +432,7 @@ class TestJiraDataCenterRunSyncSmoke:
         conn.data_source = MagicMock()
         conn.data_entities_processor.get_all_active_users = AsyncMock(return_value=[])
         conn._fetch_users = AsyncMock(return_value=[])
-        conn._sync_user_groups = AsyncMock(return_value={})
+        conn._sync_user_groups = AsyncMock(return_value=GroupMemberships({}))
         conn._fetch_application_roles_to_groups_mapping = AsyncMock(return_value={})
         conn._fetch_projects = AsyncMock(return_value=([], []))
         conn._sync_all_project_issues = AsyncMock(
@@ -475,7 +478,7 @@ class TestJiraDataCenterRunSyncSmoke:
             return_value=[MagicMock()]
         )
         conn._fetch_users = AsyncMock(return_value=[])
-        conn._sync_user_groups = AsyncMock(return_value={})
+        conn._sync_user_groups = AsyncMock(return_value=GroupMemberships({}))
         roles_mapping = {"jira-software": [{"name": "g1", "groupId": "g1"}]}
         conn._fetch_application_roles_to_groups_mapping = AsyncMock(
             return_value=roles_mapping
@@ -514,7 +517,7 @@ class TestJiraDataCenterRunSyncSmoke:
             return_value=[MagicMock()]
         )
         conn._fetch_users = AsyncMock(return_value=[])
-        conn._sync_user_groups = AsyncMock(return_value={})
+        conn._sync_user_groups = AsyncMock(return_value=GroupMemberships({}))
         conn._fetch_application_roles_to_groups_mapping = AsyncMock(return_value={})
         conn._fetch_projects = AsyncMock(return_value=([], []))
         conn._sync_project_roles = AsyncMock()
@@ -710,7 +713,7 @@ class TestJiraDataCenterDeletionAudit:
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=mock_ds):
             keys = await conn._fetch_deleted_issues_from_audit(1_700_000_000_000)
 
-        assert keys == []
+        assert keys is None, "an unread window is not reported as 'no deletions'"
         mock_ds.get_auditing_events_v1.assert_awaited_once()
 
     @pytest.mark.asyncio

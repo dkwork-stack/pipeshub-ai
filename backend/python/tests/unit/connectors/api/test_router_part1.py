@@ -845,7 +845,7 @@ class TestStreamGoogleApiRequest:
             with pytest.raises(HTTPException) as exc_info:
                 async for _ in conn._stream_google_api_request(mock_request, "download"):
                     pass
-            assert exc_info.value.status_code == HttpStatusCode.INTERNAL_SERVER_ERROR.value
+            assert exc_info.value.status_code == HttpStatusCode.FORBIDDEN.value
 
     async def test_generic_error_raises_http_exception(self):
         conn = _make_stream_connector()
@@ -3713,3 +3713,6 @@ class TestUpdateConnectorInstanceAuthConfig:
             with patch("app.connectors.api.router.get_epoch_timestamp_in_ms", return_value=999):
                 result = await update_connector_instance_auth_config("c1", request, gp)
         assert result["success"] is True
+        # saving credentials records who supplied them
+        updates = registry.update_connector_instance.await_args.kwargs["updates"]
+        assert updates["authenticatedBy"] == "user-1"
