@@ -26,7 +26,7 @@ export function EmptyState({
 }) {
   return (
     <Flex direction="column" align="center" justify="center" gap="2" style={{ padding: 'var(--space-8) 0' }}>
-      <MaterialIcon name={icon} size={40} color="var(--slate-8)" />
+      <MaterialIcon name={icon} size={40} color={portal.muted} />
       <Text size="3" weight="medium" style={{ color: portal.strong }}>
         {title}
       </Text>
@@ -47,7 +47,7 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
         {errorMessage(error)}
       </Text>
       {onRetry ? (
-        <Button variant="soft" color="blue" onClick={onRetry}>
+        <Button variant="soft" onClick={onRetry} style={portal.button.secondary}>
           Retry
         </Button>
       ) : null}
@@ -64,7 +64,7 @@ export function LoadingRows({ rows = 5 }: { rows?: number }) {
           style={{
             height: 36,
             borderRadius: 10,
-            backgroundColor: 'var(--emerald-3)',
+            backgroundColor: portal.colors.blueSoftBg,
             opacity: 1 - i * 0.12,
           }}
         />
@@ -74,11 +74,11 @@ export function LoadingRows({ rows = 5 }: { rows?: number }) {
 }
 
 export function ConnectorBadges({ connectors }: { connectors: string[] }) {
-  if (connectors.length === 0) return <Text size="1" style={{ color: 'var(--slate-10)' }}>—</Text>;
+  if (connectors.length === 0) return <Text size="1" style={{ color: portal.muted }}>—</Text>;
   return (
     <Flex gap="1" wrap="wrap">
       {connectors.map((c) => (
-        <Badge key={c} color="teal" variant="soft" size="1">
+        <Badge key={c} variant="soft" size="1" style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}>
           {c}
         </Badge>
       ))}

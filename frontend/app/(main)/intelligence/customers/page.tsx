@@ -16,6 +16,7 @@ import {
   formatCount,
   formatDate,
   formatMoney,
+  portal,
 } from '../components';
 
 const PAGE_SIZE = 25;
@@ -88,11 +89,11 @@ export default function CustomersPage() {
                   <Table.RowHeaderCell>
                     <Flex direction="column">
                       <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                        <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                        <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                           {c.customer_name}
                         </Text>
                       </Link>
-                      <Text size="1" style={{ color: 'var(--slate-10)' }}>
+                      <Text size="1" style={{ color: portal.muted }}>
                         {c.external_customer_id}
                       </Text>
                     </Flex>
@@ -105,7 +106,7 @@ export default function CustomersPage() {
                   <Table.Cell>
                     <Flex gap="1" wrap="wrap">
                       {c.top_insights.length === 0 ? (
-                        <Text size="1" style={{ color: 'var(--slate-10)' }}>
+                        <Text size="1" style={{ color: portal.muted }}>
                           —
                         </Text>
                       ) : (
@@ -114,7 +115,11 @@ export default function CustomersPage() {
                             key={i.feature_name}
                             href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}
                           >
-                            <Badge color="teal" variant="soft" size="1">
+                            <Badge
+                              variant="soft"
+                              size="1"
+                              style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}
+                            >
                               {i.feature_name} · {i.mention_count}
                             </Badge>
                           </Link>

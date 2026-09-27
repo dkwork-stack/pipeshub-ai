@@ -22,7 +22,7 @@ export function PortalHero({
             size="1"
             weight="bold"
             style={{
-              color: 'var(--emerald-11)',
+              color: portal.colors.blue,
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
             }}

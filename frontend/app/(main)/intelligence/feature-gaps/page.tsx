@@ -16,6 +16,7 @@ import {
   formatCount,
   formatMoney,
   formatScore,
+  portal,
 } from '../components';
 
 const PAGE_SIZE = 25;
@@ -91,7 +92,7 @@ export default function FeatureGapsPage() {
                 <Table.Row key={gap.feature_name}>
                   <Table.RowHeaderCell>
                     <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
-                      <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                      <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                         {gap.feature_name}
                       </Text>
                     </Link>
@@ -102,7 +103,7 @@ export default function FeatureGapsPage() {
                   <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
                   <Table.Cell align="right">{formatScore(gap.score)}</Table.Cell>
                   <Table.Cell>
-                    <Text size="1" style={{ color: 'var(--slate-11)' }}>
+                    <Text size="1" style={{ color: portal.muted }}>
                       {gap.top_customers.join(', ') || '—'}
                     </Text>
                   </Table.Cell>

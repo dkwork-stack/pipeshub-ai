@@ -15,6 +15,7 @@ import {
   PortalHero,
   SurfacePanel,
   formatCount,
+  portal,
 } from '../components';
 
 const PAGE_SIZE = 25;
@@ -83,7 +84,7 @@ export default function PainPointsPage() {
                 <Table.Row key={item.topic_name}>
                   <Table.RowHeaderCell>
                     <Link href={`/intelligence/pain-points/detail?name=${encodeURIComponent(item.topic_name)}`}>
-                      <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                      <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                         {item.topic_name}
                       </Text>
                     </Link>

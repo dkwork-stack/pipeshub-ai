@@ -7,6 +7,7 @@ import type { Mention } from '../types';
 import { ConfidenceBadge } from './confidence-badge';
 import { formatDate } from './format';
 import { EmptyState } from './states';
+import { portal } from './theme';
 
 export function MentionsTable({
   mentions,
@@ -46,7 +47,7 @@ export function MentionsTable({
             {showFeature ? (
               <Table.Cell>
                 <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(m.feature_name)}`}>
-                  <Text size="2" weight="medium" style={{ color: 'var(--accent-11)' }}>
+                  <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                     {m.feature_name}
                   </Text>
                 </Link>
@@ -55,7 +56,7 @@ export function MentionsTable({
             {showCustomer ? (
               <Table.Cell>
                 <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(m.external_customer_id)}`}>
-                  <Text size="2" style={{ color: 'var(--accent-11)' }}>
+                  <Text size="2" style={{ color: portal.colors.blue }}>
                     {m.external_customer_id}
                   </Text>
                 </Link>
@@ -64,7 +65,7 @@ export function MentionsTable({
             <Table.Cell style={{ maxWidth: 420 }}>
               <Flex direction="column" gap="1">
                 {m.description ? (
-                  <Text size="2" style={{ color: 'var(--slate-12)' }}>
+                  <Text size="2" style={{ color: portal.strong }}>
                     {m.description}
                   </Text>
                 ) : null}
@@ -72,9 +73,9 @@ export function MentionsTable({
                   <Text
                     size="1"
                     style={{
-                      color: 'var(--slate-11)',
+                      color: portal.muted,
                       fontStyle: 'italic',
-                      borderLeft: '2px solid var(--slate-6)',
+                      borderLeft: `2px solid ${portal.colors.border}`,
                       paddingLeft: 'var(--space-2)',
                     }}
                   >
@@ -89,7 +90,7 @@ export function MentionsTable({
                   {m.source_connector}
                 </Badge>
                 {m.source_type ? (
-                  <Text size="1" style={{ color: 'var(--slate-10)' }}>
+                  <Text size="1" style={{ color: portal.muted }}>
                     {m.source_type}
                   </Text>
                 ) : null}
@@ -105,14 +106,14 @@ export function MentionsTable({
             </Table.Cell>
             <Table.Cell>
               {m.citation_url ? (
-                <RadixLink href={m.citation_url} target="_blank" rel="noreferrer" size="2">
+                <RadixLink href={m.citation_url} target="_blank" rel="noreferrer" size="2" style={{ color: portal.colors.blue }}>
                   <Flex align="center" gap="1">
-                    <MaterialIcon name="open_in_new" size={14} />
+                    <MaterialIcon name="open_in_new" size={14} color={portal.colors.blue} />
                     Open
                   </Flex>
                 </RadixLink>
               ) : (
-                <Text size="1" style={{ color: 'var(--slate-10)' }}>
+                <Text size="1" style={{ color: portal.muted }}>
                   {m.external_event_id ?? '—'}
                 </Text>
               )}

@@ -5,6 +5,7 @@ import { Button, Flex, Select, Text, TextArea, TextField } from '@radix-ui/theme
 import { mergeTopic, updateTopic, useTopics } from '../api';
 import type { IntelligenceTopic } from '../types';
 import { EmptyState, ErrorState } from './states';
+import { portal } from './theme';
 
 export function TopicGuidancePanel({
   kind,
@@ -77,7 +78,7 @@ export function TopicGuidancePanel({
 
   return (
     <Flex direction="column" gap="3">
-      <Text size="2" style={{ color: 'var(--slate-11)' }}>
+      <Text size="2" style={{ color: portal.muted }}>
         Tell the extractor what belongs under <strong>{topic.canonical_name}</strong>. Lines starting
         with <code>exclude:</code> or <code>ignore:</code> drop matching items after extraction.
       </Text>
@@ -98,7 +99,7 @@ export function TopicGuidancePanel({
         />
       </Flex>
       <Flex align="center" gap="2" wrap="wrap">
-        <Button size="1" color="blue" onClick={() => void onSave()} disabled={saving}>
+        <Button size="1" onClick={() => void onSave()} disabled={saving} style={portal.button.primary}>
           Save guidance
         </Button>
         {others.length > 0 ? (
@@ -114,13 +115,13 @@ export function TopicGuidancePanel({
                 ))}
               </Select.Content>
             </Select.Root>
-            <Button size="1" variant="soft" color="blue" onClick={() => void onMerge()} disabled={saving || !mergeTargetId}>
+            <Button size="1" variant="soft" onClick={() => void onMerge()} disabled={saving || !mergeTargetId} style={portal.button.secondary}>
               Merge
             </Button>
           </>
         ) : null}
         {message ? (
-          <Text size="1" style={{ color: 'var(--slate-11)' }}>
+          <Text size="1" style={{ color: portal.muted }}>
             {message}
           </Text>
         ) : null}

@@ -27,6 +27,7 @@ import {
   formatDate,
   formatMoney,
   isNotFoundError,
+  portal,
 } from '../../components';
 
 const ALL = '__all__';
@@ -111,11 +112,16 @@ function CustomerDetailContent() {
 
           {revenue && revenue.consumed_features.length > 0 ? (
             <Flex align="center" gap="2" wrap="wrap" mb="2">
-              <Text size="1" style={{ color: 'var(--slate-11)' }}>
+              <Text size="1" style={{ color: portal.muted }}>
                 Consumed features:
               </Text>
               {revenue.consumed_features.map((f) => (
-                <Badge key={f} color="teal" variant="soft" size="1">
+                <Badge
+                  key={f}
+                  variant="soft"
+                  size="1"
+                  style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}
+                >
                   {f}
                 </Badge>
               ))}
@@ -141,7 +147,7 @@ function CustomerDetailContent() {
                     <Table.Row key={i.feature_name}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}>
-                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                          <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                             {i.feature_name}
                           </Text>
                         </Link>
@@ -180,7 +186,7 @@ function CustomerDetailContent() {
                     <Table.Row key={i.topic_name}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/pain-points/detail?name=${encodeURIComponent(i.topic_name)}`}>
-                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                          <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                             {i.topic_name}
                           </Text>
                         </Link>

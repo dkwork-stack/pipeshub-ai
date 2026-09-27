@@ -26,7 +26,7 @@ export function StatStrip({ items }: { items: StatItem[] }) {
         >
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
-              {item.icon ? <MaterialIcon name={item.icon} size={16} color="var(--emerald-10)" /> : null}
+              {item.icon ? <MaterialIcon name={item.icon} size={16} color={portal.colors.blue} /> : null}
               <Text size="1" weight="medium" style={{ color: portal.muted }}>
                 {item.label}
               </Text>
@@ -44,7 +44,7 @@ export function StatStrip({ items }: { items: StatItem[] }) {
               {item.value}
             </Text>
             {item.hint ? (
-              <Text size="1" style={{ color: 'var(--slate-10)' }}>
+              <Text size="1" style={{ color: portal.muted }}>
                 {item.hint}
               </Text>
             ) : null}

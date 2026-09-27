@@ -48,7 +48,7 @@ export function FiltersBar({
         style={{ minWidth: 260, flex: '1 1 260px' }}
       >
         <TextField.Slot>
-          <MaterialIcon name="search" size={16} color="var(--slate-9)" />
+          <MaterialIcon name="search" size={16} color={portal.muted} />
         </TextField.Slot>
       </TextField.Root>
       {!hideMinArr ? (
@@ -62,7 +62,7 @@ export function FiltersBar({
           style={{ width: 160 }}
         >
           <TextField.Slot>
-            <MaterialIcon name="attach_money" size={16} color="var(--slate-9)" />
+            <MaterialIcon name="attach_money" size={16} color={portal.muted} />
           </TextField.Slot>
         </TextField.Root>
       ) : null}
@@ -104,18 +104,18 @@ export function PaginationBar({
         <Button
           size="1"
           variant="soft"
-          color="blue"
           disabled={page.offset === 0}
           onClick={() => onOffsetChange(Math.max(0, page.offset - page.limit))}
+          style={portal.button.secondary}
         >
           Previous
         </Button>
         <Button
           size="1"
           variant="soft"
-          color="blue"
           disabled={!page.has_more}
           onClick={() => onOffsetChange(page.offset + page.limit)}
+          style={portal.button.secondary}
         >
           Next
         </Button>

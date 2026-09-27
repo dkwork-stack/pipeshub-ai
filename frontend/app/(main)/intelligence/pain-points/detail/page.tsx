@@ -27,6 +27,7 @@ import {
   formatDate,
   formatMoney,
   isNotFoundError,
+  portal,
 } from '../../components';
 
 const ALL = '__all__';
@@ -116,7 +117,7 @@ function PainPointDetailContent() {
                     <Table.Row key={c.external_customer_id}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                          <Text size="2" style={{ color: 'var(--emerald-11)' }}>
+                          <Text size="2" style={{ color: portal.colors.blue }}>
                             {c.customer_name}
                           </Text>
                         </Link>
@@ -181,7 +182,7 @@ function PainPointDetailContent() {
                         <Flex direction="column" gap="1">
                           <Text size="2">{m.summary}</Text>
                           {m.excerpt ? (
-                            <Text size="1" style={{ color: 'var(--slate-11)', fontStyle: 'italic' }}>
+                            <Text size="1" style={{ color: portal.muted, fontStyle: 'italic' }}>
                               “{m.excerpt}”
                             </Text>
                           ) : null}

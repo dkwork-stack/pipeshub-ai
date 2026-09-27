@@ -29,7 +29,7 @@ export default function IntelligenceOverviewPage() {
         subtitle="See what customers ask for, how much ARR is at stake, and the evidence behind every request."
         actions={
           data?.last_mention_at ? (
-            <Text size="2" style={{ color: 'var(--slate-10)' }}>
+            <Text size="2" style={{ color: portal.muted }}>
               Last evidence {formatDate(data.last_mention_at)}
             </Text>
           ) : null
@@ -74,7 +74,7 @@ export default function IntelligenceOverviewPage() {
           />
 
           <Flex align="center" gap="2" wrap="wrap" mb="5">
-            <Text size="2" style={{ color: 'var(--slate-11)' }}>
+            <Text size="2" style={{ color: portal.muted }}>
               Connected sources
             </Text>
             <ConnectorBadges connectors={data.source_connectors} />
@@ -84,7 +84,7 @@ export default function IntelligenceOverviewPage() {
             <SurfacePanel
               title="Top feature gaps"
               action={
-                <Button asChild size="1" variant="soft" color="blue">
+                <Button asChild size="1" variant="soft" style={portal.button.secondary}>
                   <Link href="/intelligence/feature-gaps">View all</Link>
                 </Button>
               }
@@ -112,7 +112,7 @@ export default function IntelligenceOverviewPage() {
                       <Table.Row key={gap.feature_name}>
                         <Table.RowHeaderCell>
                           <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
-                            <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                            <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                               {gap.feature_name}
                             </Text>
                           </Link>
@@ -131,7 +131,7 @@ export default function IntelligenceOverviewPage() {
             <SurfacePanel
               title="Top customers"
               action={
-                <Button asChild size="1" variant="soft" color="blue">
+                <Button asChild size="1" variant="soft" style={portal.button.secondary}>
                   <Link href="/intelligence/customers">View all</Link>
                 </Button>
               }
@@ -153,7 +153,7 @@ export default function IntelligenceOverviewPage() {
                       <Table.Row key={c.external_customer_id}>
                         <Table.RowHeaderCell>
                           <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                            <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                            <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                               {c.customer_name}
                             </Text>
                           </Link>

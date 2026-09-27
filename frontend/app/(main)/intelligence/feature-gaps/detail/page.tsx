@@ -27,6 +27,7 @@ import {
   formatMoney,
   formatScore,
   isNotFoundError,
+  portal,
 } from '../../components';
 
 const ALL = '__all__';
@@ -126,7 +127,7 @@ function FeatureGapDetailContent() {
                     <Table.Row key={c.external_customer_id}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                          <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                             {c.customer_name}
                           </Text>
                         </Link>
@@ -138,10 +139,10 @@ function FeatureGapDetailContent() {
                         <Button
                           size="1"
                           variant={customerId === c.external_customer_id ? 'solid' : 'soft'}
-                          color="blue"
                           onClick={() =>
                             setCustomerId(customerId === c.external_customer_id ? '' : c.external_customer_id)
                           }
+                          style={customerId === c.external_customer_id ? portal.button.primary : portal.button.secondary}
                         >
                           {customerId === c.external_customer_id ? 'Clear filter' : 'Filter evidence'}
                         </Button>
@@ -158,7 +159,7 @@ function FeatureGapDetailContent() {
             action={
               <Flex gap="2" align="center">
                 {customerId ? (
-                  <Button size="1" variant="soft" color="blue" onClick={() => setCustomerId('')}>
+                  <Button size="1" variant="soft" onClick={() => setCustomerId('')} style={portal.button.secondary}>
                     Customer: {customerId} ✕
                   </Button>
                 ) : null}

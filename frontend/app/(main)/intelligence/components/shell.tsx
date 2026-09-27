@@ -48,7 +48,7 @@ function NavRail() {
           height: '100%',
           width: expanded ? portal.rail.expandedWidth : portal.rail.collapsedWidth,
           backgroundColor: '#ffffff',
-          borderRight: '1px solid var(--slate-4)',
+          borderRight: `1px solid ${portal.colors.border}`,
           boxShadow: expanded ? '8px 0 28px rgba(15, 23, 42, 0.10)' : 'none',
           overflow: 'hidden',
           transition: 'width 0.16s ease, box-shadow 0.16s ease',
@@ -99,7 +99,7 @@ function NavRail() {
                     borderRadius: 10,
                     padding: '0 14px',
                     textDecoration: 'none',
-                    backgroundColor: active ? 'var(--blue-9)' : 'transparent',
+                    backgroundColor: active ? portal.colors.blue : 'transparent',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                   }}
@@ -122,7 +122,16 @@ function NavRail() {
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
   return (
-    <Flex style={{ height: '100%', width: '100%', overflow: 'hidden', backgroundColor: portal.pageBg }}>
+    <Flex
+      style={{
+        height: '100%',
+        width: '100%',
+        overflow: 'hidden',
+        backgroundColor: portal.pageBg,
+        fontFamily: portal.displayFont,
+        color: portal.strong,
+      }}
+    >
       <NavRail />
       <Box className="no-scrollbar" style={{ flex: 1, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
         <Box px="6" py="6" style={{ maxWidth: portal.contentMaxWidth, width: '100%', margin: '0 auto' }}>

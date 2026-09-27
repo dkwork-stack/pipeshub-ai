@@ -1,5 +1,7 @@
 @import '@radix-ui/themes/styles.css';
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap');
+/* Used only by the /intelligence (Cooper) portal — see app/(main)/intelligence/components/theme.ts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 @font-face {
   font-family: 'ClashGrotesk';
