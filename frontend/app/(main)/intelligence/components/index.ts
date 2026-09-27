@@ -1,5 +1,6 @@
 export { PortalShell } from './shell';
 export { PortalHero } from './hero';
+export { portal } from './theme';
 export { StatStrip } from './stats';
 export type { StatItem } from './stats';
 export { SurfacePanel } from './panel';

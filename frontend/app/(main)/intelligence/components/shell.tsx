@@ -1,13 +1,14 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Box, Flex, Text } from '@radix-ui/themes';
+import { Box, Flex, Text, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { portal } from './theme';
 
 const NAV = [
-  { href: '/intelligence', label: 'Overview', icon: 'insights', exact: true },
+  { href: '/intelligence', label: 'Overview', icon: 'dashboard', exact: true },
   { href: '/intelligence/feature-gaps', label: 'Feature Gaps', icon: 'extension' },
   { href: '/intelligence/pain-points', label: 'Pain Points', icon: 'report_problem' },
   { href: '/intelligence/customers', label: 'Customers', icon: 'groups' },
@@ -18,96 +19,115 @@ function isActive(pathname: string, href: string, exact?: boolean) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function PortalShell({ children }: { children: React.ReactNode }) {
+/**
+ * Icon-only rail by default; hovering anywhere over it expands it in place
+ * (absolute overlay, so it never reflows the page content) to reveal labels.
+ */
+function NavRail() {
   const pathname = usePathname();
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <Flex direction="column" style={{ minHeight: '100%', background: portal.pageBg }}>
-      <Box
+    <Box
+      onMouseEnter={() => setExpanded(true)}
+      onMouseLeave={() => setExpanded(false)}
+      style={{
+        flexShrink: 0,
+        width: portal.rail.collapsedWidth,
+        height: '100%',
+        position: 'relative',
+        zIndex: 30,
+      }}
+    >
+      <Flex
+        direction="column"
         style={{
-          position: 'sticky',
+          position: 'absolute',
           top: 0,
-          zIndex: 5,
-          backdropFilter: 'blur(12px)',
-          backgroundColor: 'rgba(245, 254, 251, 0.78)',
-          borderBottom: '1px solid var(--slate-5)',
+          left: 0,
+          height: '100%',
+          width: expanded ? portal.rail.expandedWidth : portal.rail.collapsedWidth,
+          backgroundColor: '#ffffff',
+          borderRight: '1px solid var(--slate-4)',
+          boxShadow: expanded ? '8px 0 28px rgba(15, 23, 42, 0.10)' : 'none',
+          overflow: 'hidden',
+          transition: 'width 0.16s ease, box-shadow 0.16s ease',
         }}
       >
-        <Flex
-          align="center"
-          justify="between"
-          gap="4"
-          wrap="wrap"
-          px="5"
-          style={{ maxWidth: portal.contentMaxWidth, margin: '0 auto', minHeight: 64 }}
-        >
-          <Flex align="center" gap="2">
-            <Box
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 10,
-                display: 'grid',
-                placeItems: 'center',
-                background: 'linear-gradient(145deg, var(--emerald-4), var(--emerald-7))',
-              }}
-            >
-              <MaterialIcon name="lightbulb" size={18} color="var(--emerald-12)" />
-            </Box>
-            <Flex direction="column" gap="0">
+        <Flex align="center" gap="3" px="4" style={{ height: 64, flexShrink: 0 }}>
+          <Box
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              flexShrink: 0,
+              display: 'grid',
+              placeItems: 'center',
+              background: portal.brand.gradient,
+            }}
+          >
+            <MaterialIcon name={portal.brand.icon} size={19} color="white" />
+          </Box>
+          {expanded ? (
+            <Flex direction="column" gap="0" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
               <Text
                 size="3"
                 weight="bold"
                 style={{ color: portal.strong, fontFamily: portal.displayFont, letterSpacing: '-0.02em' }}
               >
-                Feature Intelligence
+                {portal.brand.name}
               </Text>
               <Text size="1" style={{ color: portal.muted }}>
-                Revenue-weighted product gaps
+                {portal.brand.tagline}
               </Text>
             </Flex>
-          </Flex>
+          ) : null}
+        </Flex>
 
-          <Flex
-            align="center"
-            gap="1"
-            p="1"
-            style={{
-              backgroundColor: 'rgba(255,255,255,0.7)',
-              border: '1px solid var(--slate-5)',
-              borderRadius: 999,
-            }}
-          >
-            {NAV.map((item) => {
-              const active = isActive(pathname, item.href, 'exact' in item ? item.exact : false);
-              return (
+        <Flex direction="column" gap="1" px="2" py="2" style={{ flex: 1 }}>
+          {NAV.map((item) => {
+            const active = isActive(pathname, item.href, 'exact' in item ? item.exact : false);
+            return (
+              <Tooltip key={item.href} content={item.label} side="right">
                 <Link
-                  key={item.href}
                   href={item.href}
                   style={{
-                    ...portal.navPill,
-                    display: 'inline-flex',
+                    display: 'flex',
                     alignItems: 'center',
-                    gap: 6,
+                    gap: 12,
+                    height: 40,
+                    borderRadius: 10,
+                    padding: '0 14px',
                     textDecoration: 'none',
-                    backgroundColor: active ? 'var(--emerald-9)' : 'transparent',
-                    color: active ? 'white' : portal.muted,
-                    fontWeight: active ? 600 : 500,
+                    backgroundColor: active ? 'var(--blue-9)' : 'transparent',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
                   }}
                 >
-                  <MaterialIcon name={item.icon} size={16} color={active ? 'white' : undefined} />
-                  <Text size="2" weight={active ? 'bold' : 'medium'}>
-                    {item.label}
-                  </Text>
+                  <MaterialIcon name={item.icon} size={20} color={active ? 'white' : portal.muted} />
+                  {expanded ? (
+                    <Text size="2" weight={active ? 'bold' : 'medium'} style={{ color: active ? 'white' : portal.muted }}>
+                      {item.label}
+                    </Text>
+                  ) : null}
                 </Link>
-              );
-            })}
-          </Flex>
+              </Tooltip>
+            );
+          })}
         </Flex>
-      </Box>
+      </Flex>
+    </Box>
+  );
+}
 
-      <Box px="5" py="6" style={{ maxWidth: portal.contentMaxWidth, width: '100%', margin: '0 auto' }}>
-        {children}
+export function PortalShell({ children }: { children: React.ReactNode }) {
+  return (
+    <Flex style={{ height: '100%', width: '100%', overflow: 'hidden', backgroundColor: portal.pageBg }}>
+      <NavRail />
+      <Box className="no-scrollbar" style={{ flex: 1, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
+        <Box px="6" py="6" style={{ maxWidth: portal.contentMaxWidth, width: '100%', margin: '0 auto' }}>
+          {children}
+        </Box>
       </Box>
     </Flex>
   );

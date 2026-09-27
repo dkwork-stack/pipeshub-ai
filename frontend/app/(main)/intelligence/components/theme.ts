@@ -1,22 +1,27 @@
-/** Shared visual tokens for the intelligence portal (Freshservice-inspired, PipesHub palette). */
+/** Shared visual tokens for the Cooper customer intelligence portal. */
 
 export const portal = {
-  pageBg:
-    'radial-gradient(1200px 480px at 12% -10%, rgba(18, 249, 157, 0.14), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(4, 120, 87, 0.08), transparent 50%), linear-gradient(180deg, #f5fefb 0%, #f7f8f7 42%, #f4f5f4 100%)',
+  pageBg: '#ffffff',
   contentMaxWidth: 1180,
   displayFont: 'ClashGrotesk, Manrope, sans-serif',
   panel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
-    border: '1px solid var(--slate-5)',
+    backgroundColor: '#ffffff',
+    border: '1px solid var(--slate-4)',
     borderRadius: 16,
-    boxShadow: '0 1px 2px rgba(15, 61, 44, 0.04), 0 8px 24px rgba(15, 61, 44, 0.04)',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 16px rgba(15, 23, 42, 0.05)',
   } as const,
-  navPill: {
-    height: 36,
-    borderRadius: 999,
-    padding: '0 14px',
+  rail: {
+    collapsedWidth: 76,
+    expandedWidth: 244,
   } as const,
   muted: 'var(--slate-11)',
   strong: 'var(--slate-12)',
-  accent: 'var(--accent-9)',
+  accent: 'var(--blue-9)',
+  /** Single source of truth for product branding — update here, not per-component. */
+  brand: {
+    name: 'Cooper',
+    tagline: 'Feature Intelligence',
+    icon: 'auto_awesome',
+    gradient: 'linear-gradient(145deg, var(--blue-8), var(--blue-11))',
+  } as const,
 } as const;

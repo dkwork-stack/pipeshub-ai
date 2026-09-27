@@ -15,6 +15,7 @@ import {
   formatDate,
   formatMoney,
   formatScore,
+  portal,
 } from './components';
 
 export default function IntelligenceOverviewPage() {
@@ -23,7 +24,7 @@ export default function IntelligenceOverviewPage() {
   return (
     <Flex direction="column">
       <PortalHero
-        eyebrow="Customer Feature Intelligence"
+        eyebrow={portal.brand.name}
         title="Gaps ranked by revenue impact"
         subtitle="See what customers ask for, how much ARR is at stake, and the evidence behind every request."
         actions={
@@ -83,7 +84,7 @@ export default function IntelligenceOverviewPage() {
             <SurfacePanel
               title="Top feature gaps"
               action={
-                <Button asChild size="1" variant="soft" color="teal">
+                <Button asChild size="1" variant="soft" color="blue">
                   <Link href="/intelligence/feature-gaps">View all</Link>
                 </Button>
               }
@@ -130,7 +131,7 @@ export default function IntelligenceOverviewPage() {
             <SurfacePanel
               title="Top customers"
               action={
-                <Button asChild size="1" variant="soft" color="teal">
+                <Button asChild size="1" variant="soft" color="blue">
                   <Link href="/intelligence/customers">View all</Link>
                 </Button>
               }

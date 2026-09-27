@@ -98,7 +98,7 @@ export function TopicGuidancePanel({
         />
       </Flex>
       <Flex align="center" gap="2" wrap="wrap">
-        <Button size="1" onClick={() => void onSave()} disabled={saving}>
+        <Button size="1" color="blue" onClick={() => void onSave()} disabled={saving}>
           Save guidance
         </Button>
         {others.length > 0 ? (
@@ -114,7 +114,7 @@ export function TopicGuidancePanel({
                 ))}
               </Select.Content>
             </Select.Root>
-            <Button size="1" variant="soft" color="amber" onClick={() => void onMerge()} disabled={saving || !mergeTargetId}>
+            <Button size="1" variant="soft" color="blue" onClick={() => void onMerge()} disabled={saving || !mergeTargetId}>
               Merge
             </Button>
           </>

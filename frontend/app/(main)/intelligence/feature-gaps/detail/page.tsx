@@ -138,7 +138,7 @@ function FeatureGapDetailContent() {
                         <Button
                           size="1"
                           variant={customerId === c.external_customer_id ? 'solid' : 'soft'}
-                          color="gray"
+                          color="blue"
                           onClick={() =>
                             setCustomerId(customerId === c.external_customer_id ? '' : c.external_customer_id)
                           }
@@ -158,7 +158,7 @@ function FeatureGapDetailContent() {
             action={
               <Flex gap="2" align="center">
                 {customerId ? (
-                  <Button size="1" variant="soft" color="gray" onClick={() => setCustomerId('')}>
+                  <Button size="1" variant="soft" color="blue" onClick={() => setCustomerId('')}>
                     Customer: {customerId} ✕
                   </Button>
                 ) : null}

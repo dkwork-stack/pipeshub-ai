@@ -47,7 +47,7 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
         {errorMessage(error)}
       </Text>
       {onRetry ? (
-        <Button variant="soft" color="gray" onClick={onRetry}>
+        <Button variant="soft" color="blue" onClick={onRetry}>
           Retry
         </Button>
       ) : null}

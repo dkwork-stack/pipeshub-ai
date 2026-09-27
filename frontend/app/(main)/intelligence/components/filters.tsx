@@ -104,7 +104,7 @@ export function PaginationBar({
         <Button
           size="1"
           variant="soft"
-          color="gray"
+          color="blue"
           disabled={page.offset === 0}
           onClick={() => onOffsetChange(Math.max(0, page.offset - page.limit))}
         >
@@ -113,7 +113,7 @@ export function PaginationBar({
         <Button
           size="1"
           variant="soft"
-          color="gray"
+          color="blue"
           disabled={!page.has_more}
           onClick={() => onOffsetChange(page.offset + page.limit)}
         >
