@@ -76,6 +76,9 @@ def feature_gap_response(s: FeatureGapScore) -> FeatureGapResponse:
         mention_count=s.mention_count,
         score=s.score,
         top_customers=s.top_customers,
+        max_confidence=s.max_confidence,
+        avg_confidence=s.avg_confidence,
+        low_confidence_count=s.low_confidence_count,
     )
 
 
@@ -88,6 +91,70 @@ def feature_gap_detail_response(d: FeatureGapDetail) -> FeatureGapDetailResponse
         **feature_gap_response(d.score).model_dump(),
         affected_customers=[affected_customer_response(c) for c in d.affected_customers],
         mentions=[mention_response(m) for m in d.mentions],
+    )
+
+
+def pain_point_mention_response(m: "PainPointMentionRecord") -> "PainPointMentionResponse":
+    from app.api.schemas.intelligence_portal import PainPointMentionResponse
+
+    return PainPointMentionResponse(
+        external_customer_id=m.external_customer_id,
+        topic_name=m.topic_name,
+        summary=m.summary,
+        sentiment=m.sentiment,
+        confidence=m.confidence,
+        excerpt=m.excerpt,
+        source_connector=m.source_connector,
+        source_type=m.source_type.value if hasattr(m.source_type, "value") else str(m.source_type),
+        external_event_id=m.external_event_id,
+        citation_url=m.citation_url,
+        occurred_at=m.occurred_at,
+    )
+
+
+def pain_point_response(s: "PainPointScore") -> "PainPointResponse":
+    from app.api.schemas.intelligence_portal import PainPointResponse
+
+    return PainPointResponse(
+        topic_name=s.topic_name,
+        customer_count=s.customer_count,
+        mention_count=s.mention_count,
+        max_confidence=s.max_confidence,
+        avg_confidence=s.avg_confidence,
+        low_confidence_count=s.low_confidence_count,
+        top_customers=s.top_customers,
+    )
+
+
+def pain_point_detail_response(d: "PainPointDetail") -> "PainPointDetailResponse":
+    from app.api.schemas.intelligence_portal import PainPointDetailResponse
+
+    return PainPointDetailResponse(
+        **pain_point_response(d.score).model_dump(),
+        affected_customers=[affected_customer_response(c) for c in d.affected_customers],
+        mentions=[pain_point_mention_response(m) for m in d.mentions],
+    )
+
+
+def pain_point_insight_response(i: "PainPointInsight") -> "PainPointInsightResponse":
+    from app.api.schemas.intelligence_portal import PainPointInsightResponse
+
+    return PainPointInsightResponse(**i.model_dump())
+
+
+def topic_response(t: "IntelligenceTopic") -> "TopicResponse":
+    from app.api.schemas.intelligence_portal import TopicResponse
+
+    return TopicResponse(
+        id=t.id or 0,
+        kind=t.kind.value if hasattr(t.kind, "value") else str(t.kind),
+        canonical_name=t.canonical_name,
+        aliases=t.aliases or [],
+        guidance=t.guidance,
+        merged_into_id=t.merged_into_id,
+        updated_by=t.updated_by,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
     )
 
 
@@ -106,7 +173,9 @@ def customer_detail_response(d: CustomerDetail) -> CustomerDetailResponse:
     return CustomerDetailResponse(
         **customer_response(d).model_dump(),
         insights=[insight_response(i) for i in d.insights],
+        pain_point_insights=[pain_point_insight_response(i) for i in d.pain_point_insights],
         mentions=[mention_response(m) for m in d.mentions],
+        pain_point_mentions=[pain_point_mention_response(m) for m in d.pain_point_mentions],
     )
 
 

@@ -1,16 +1,19 @@
 'use client';
 
 import useSWR from 'swr';
-import { axiosFetcher } from '@/lib/api';
+import { apiClient, axiosFetcher } from '@/lib/api';
 import type {
   CustomerDetail,
   CustomerSummary,
   FeatureGap,
   FeatureGapDetail,
   IntelligenceOverview,
+  IntelligenceTopic,
   ListFilters,
   MentionFilters,
   Page,
+  PainPoint,
+  PainPointDetail,
   SourceConnectorsResponse,
 } from './types';
 
@@ -34,6 +37,11 @@ export const intelligenceUrls = {
   featureGaps: (f: ListFilters) => buildUrl('/feature-gaps', f),
   featureGap: (name: string, f: MentionFilters = {}) =>
     buildUrl(`/feature-gaps/${encodeURIComponent(name)}`, f),
+  painPoints: (f: ListFilters) => buildUrl('/pain-points', f),
+  painPoint: (name: string, f: MentionFilters = {}) =>
+    buildUrl(`/pain-points/${encodeURIComponent(name)}`, f),
+  topics: (kind?: string) => buildUrl('/topics', { kind }),
+  topic: (id: number) => buildUrl(`/topics/${id}`),
   customers: (f: ListFilters) => buildUrl('/customers', f),
   customer: (id: string, f: MentionFilters = {}) =>
     buildUrl(`/customers/${encodeURIComponent(id)}`, f),
@@ -64,6 +72,49 @@ export function useFeatureGap(name: string | null, filters: MentionFilters = {})
     axiosFetcher,
     swrOptions,
   );
+}
+
+export function usePainPoints(filters: ListFilters) {
+  return useSWR<Page<PainPoint>>(intelligenceUrls.painPoints(filters), axiosFetcher, swrOptions);
+}
+
+export function usePainPoint(name: string | null, filters: MentionFilters = {}) {
+  return useSWR<PainPointDetail>(
+    name ? intelligenceUrls.painPoint(name, filters) : null,
+    axiosFetcher,
+    swrOptions,
+  );
+}
+
+export function useTopics(kind?: 'pain_point' | 'feature_gap') {
+  return useSWR<IntelligenceTopic[]>(intelligenceUrls.topics(kind), axiosFetcher, swrOptions);
+}
+
+export function useTopic(id: number | null) {
+  return useSWR<IntelligenceTopic>(
+    id != null ? intelligenceUrls.topic(id) : null,
+    axiosFetcher,
+    swrOptions,
+  );
+}
+
+export async function updateTopic(
+  id: number,
+  body: { guidance?: string | null; aliases?: string[]; canonical_name?: string },
+): Promise<IntelligenceTopic> {
+  const { data } = await apiClient.patch<IntelligenceTopic>(
+    `${INTELLIGENCE_API_BASE}/topics/${id}`,
+    body,
+  );
+  return data;
+}
+
+export async function mergeTopic(sourceId: number, targetId: number): Promise<IntelligenceTopic> {
+  const { data } = await apiClient.post<IntelligenceTopic>(
+    `${INTELLIGENCE_API_BASE}/topics/${sourceId}/merge`,
+    { target_id: targetId },
+  );
+  return data;
 }
 
 export function useCustomers(filters: ListFilters) {

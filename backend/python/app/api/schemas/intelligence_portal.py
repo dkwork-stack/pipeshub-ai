@@ -42,8 +42,21 @@ class InsightResponse(BaseModel):
     feature_name: str
     mention_count: int
     max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
     last_mentioned_at: datetime
     source_connectors: list[str] = Field(default_factory=list)
+
+
+class PainPointInsightResponse(BaseModel):
+    topic_name: str
+    mention_count: int
+    max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
+    last_mentioned_at: datetime
+    source_connectors: list[str] = Field(default_factory=list)
+    sentiments: list[str] = Field(default_factory=list)
 
 
 class MentionResponse(BaseModel):
@@ -61,6 +74,20 @@ class MentionResponse(BaseModel):
     occurred_at: datetime
 
 
+class PainPointMentionResponse(BaseModel):
+    external_customer_id: str
+    topic_name: str
+    summary: str
+    sentiment: str
+    confidence: float
+    excerpt: str
+    source_connector: str
+    source_type: str
+    external_event_id: str
+    citation_url: Optional[str] = None
+    occurred_at: datetime
+
+
 class FeatureGapResponse(BaseModel):
     feature_name: str
     total_arr_at_stake: float
@@ -69,6 +96,9 @@ class FeatureGapResponse(BaseModel):
     mention_count: int
     score: float
     top_customers: list[str] = Field(default_factory=list)
+    max_confidence: Optional[float] = None
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
 
 
 class AffectedCustomerResponse(BaseModel):
@@ -84,6 +114,21 @@ class FeatureGapDetailResponse(FeatureGapResponse):
     mentions: list[MentionResponse] = Field(default_factory=list)
 
 
+class PainPointResponse(BaseModel):
+    topic_name: str
+    customer_count: int
+    mention_count: int
+    max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
+    top_customers: list[str] = Field(default_factory=list)
+
+
+class PainPointDetailResponse(PainPointResponse):
+    affected_customers: list[AffectedCustomerResponse] = Field(default_factory=list)
+    mentions: list[PainPointMentionResponse] = Field(default_factory=list)
+
+
 class CustomerResponse(BaseModel):
     external_customer_id: str
     customer_name: str
@@ -95,7 +140,31 @@ class CustomerResponse(BaseModel):
 
 class CustomerDetailResponse(CustomerResponse):
     insights: list[InsightResponse] = Field(default_factory=list)
+    pain_point_insights: list[PainPointInsightResponse] = Field(default_factory=list)
     mentions: list[MentionResponse] = Field(default_factory=list)
+    pain_point_mentions: list[PainPointMentionResponse] = Field(default_factory=list)
+
+
+class TopicResponse(BaseModel):
+    id: int
+    kind: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list)
+    guidance: Optional[str] = None
+    merged_into_id: Optional[int] = None
+    updated_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class TopicUpdateRequest(BaseModel):
+    guidance: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    canonical_name: Optional[str] = None
+
+
+class TopicMergeRequestBody(BaseModel):
+    target_id: int
 
 
 class OverviewResponse(BaseModel):

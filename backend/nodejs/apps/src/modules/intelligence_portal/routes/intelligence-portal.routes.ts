@@ -20,6 +20,12 @@ import {
   getSourceConnectors,
   searchFeatureGaps,
   getFeatureGap,
+  searchPainPoints,
+  getPainPoint,
+  listTopics,
+  getTopic,
+  updateTopic,
+  mergeTopic,
   searchCustomers,
   getCustomer,
   getHealth,
@@ -30,6 +36,7 @@ export function createIntelligencePortalRouter(container: Container): Router {
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   const appConfig = container.get<AppConfig>('AppConfig');
   const read = requireScopes(OAuthScopeNames.INTELLIGENCE_READ);
+  const write = requireScopes(OAuthScopeNames.INTELLIGENCE_WRITE);
 
   router.get('/health', getHealth(appConfig));
 
@@ -57,6 +64,44 @@ export function createIntelligencePortalRouter(container: Container): Router {
     authMiddleware.authenticate,
     read,
     getFeatureGap(appConfig),
+  );
+
+  router.get(
+    '/pain-points',
+    authMiddleware.authenticate,
+    read,
+    searchPainPoints(appConfig),
+  );
+  router.get(
+    '/pain-points/:topicName',
+    authMiddleware.authenticate,
+    read,
+    getPainPoint(appConfig),
+  );
+
+  router.get(
+    '/topics',
+    authMiddleware.authenticate,
+    read,
+    listTopics(appConfig),
+  );
+  router.get(
+    '/topics/:topicId',
+    authMiddleware.authenticate,
+    read,
+    getTopic(appConfig),
+  );
+  router.patch(
+    '/topics/:topicId',
+    authMiddleware.authenticate,
+    write,
+    updateTopic(appConfig),
+  );
+  router.post(
+    '/topics/:topicId/merge',
+    authMiddleware.authenticate,
+    write,
+    mergeTopic(appConfig),
   );
 
   router.get(

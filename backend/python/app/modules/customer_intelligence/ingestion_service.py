@@ -25,8 +25,14 @@ from app.models.intelligence import (
     CustomerSignalEvent,
     FeatureGapMentionRecord,
     FeatureIntelligenceExtractionResult,
+    IntelligenceTopic,
+    PainPointMentionRecord,
     SignalSourceType,
+    TaxonomyHint,
+    TopicKind,
 )
+from app.modules.customer_intelligence.pipeline import run_pipeline
+from app.modules.customer_intelligence.pipeline.context import ExtractionContext
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -64,17 +70,41 @@ class CustomerIntelligenceIngestionService:
     async def ingest_signal_event(self, event: CustomerSignalEvent) -> int:
         """Run pain-point/feature-gap inference on one event and persist mentions.
 
-        Returns the number of feature-gap mentions written (0 is a valid,
-        common outcome — most tickets/notes don't raise a product gap).
+        Returns the number of feature-gap + pain-point mentions written (0 is a
+        valid, common outcome — most tickets/notes don't raise a product gap).
         """
         await self.intelligence_store.upsert_customer(
             event.org_id, event.external_customer_id, event.customer_name
         )
 
+        taxonomy, hints, known_customers = await self._load_prompt_context(event.org_id)
         result = await self.extraction_client.extract_feature_intelligence(
-            text=event.text, org_id=event.org_id
+            text=event.text,
+            org_id=event.org_id,
+            taxonomy=hints,
+            known_customers=[name for _, name in known_customers],
         )
-        return await self._write_mentions(event, result)
+        ctx = await self._run_stages(
+            org_id=event.org_id,
+            text=event.text,
+            result=result,
+            taxonomy=taxonomy,
+            hints=hints,
+            known_customers=known_customers,
+            resolved_customer_id=event.external_customer_id,
+            resolved_customer_name=event.customer_name,
+        )
+        if ctx.resolved_customer_id and ctx.resolved_customer_name:
+            event = event.model_copy(
+                update={
+                    "external_customer_id": ctx.resolved_customer_id,
+                    "customer_name": ctx.resolved_customer_name,
+                }
+            )
+            await self.intelligence_store.upsert_customer(
+                event.org_id, event.external_customer_id, event.customer_name
+            )
+        return await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
 
     async def ingest_revenue_snapshot(self, snapshot: CustomerRevenueSnapshot) -> None:
         await self.intelligence_store.upsert_revenue_snapshot(snapshot)
@@ -155,7 +185,7 @@ class CustomerIntelligenceIngestionService:
                 )
 
         self.logger.info(
-            "✅ Upload '%s': %d unit(s) analysed, %d feature-gap mention(s) written (%d unit failure(s))",
+            "✅ Upload '%s': %d unit(s) analysed, %d mention(s) written (%d unit failure(s))",
             record.record_name, len(units), total, failures,
         )
         if failures and total == 0:
@@ -198,18 +228,41 @@ class CustomerIntelligenceIngestionService:
         return [(record.id, text)] if text.strip() else []
 
     async def _ingest_upload_unit(self, record: "Record", event_id: str, text: str) -> int:
+        taxonomy, hints, known_customers = await self._load_prompt_context(record.org_id)
         result = await self.extraction_client.extract_feature_intelligence(
-            text=text, org_id=record.org_id, infer_customer=True
+            text=text,
+            org_id=record.org_id,
+            infer_customer=True,
+            taxonomy=hints,
+            known_customers=[name for _, name in known_customers],
         )
-        if result is None or not result.feature_gaps:
+        if result is None:
             return 0
 
-        customer_name = (result.customer_name or "").strip() or record.record_name
+        ctx = await self._run_stages(
+            org_id=record.org_id,
+            text=text,
+            result=result,
+            taxonomy=taxonomy,
+            hints=hints,
+            known_customers=known_customers,
+        )
+        if not ctx.result.feature_gaps and not ctx.result.pain_points:
+            return 0
+
+        customer_name = (
+            (ctx.resolved_customer_name or ctx.result.customer_name or "").strip()
+            or record.record_name
+        )
+        external_customer_id = (
+            ctx.resolved_customer_id
+            or f"{UPLOAD_SOURCE_CONNECTOR}:{_slugify(customer_name)}"
+        )
         event = CustomerSignalEvent(
             org_id=record.org_id,
             source_connector=UPLOAD_SOURCE_CONNECTOR,
             source_type=SignalSourceType.DOCUMENT_UPLOAD,
-            external_customer_id=f"{UPLOAD_SOURCE_CONNECTOR}:{_slugify(customer_name)}",
+            external_customer_id=external_customer_id,
             customer_name=customer_name,
             external_event_id=event_id,
             text=text,
@@ -222,24 +275,84 @@ class CustomerIntelligenceIngestionService:
         await self.intelligence_store.upsert_customer(
             event.org_id, event.external_customer_id, event.customer_name
         )
-        return await self._write_mentions(event, result)
+        return await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
 
     # ------------------------------------------------------------------
+
+    async def _load_prompt_context(
+        self, org_id: str
+    ) -> tuple[list[IntelligenceTopic], list[TaxonomyHint], list[tuple[str, str]]]:
+        taxonomy = await self.intelligence_store.list_topics(org_id)
+        hints = [
+            TaxonomyHint(
+                id=str(t.id),
+                kind=t.kind,
+                name=t.canonical_name,
+                aliases=t.aliases or [],
+                guidance=t.guidance,
+            )
+            for t in taxonomy
+            if t.id is not None
+        ]
+        known_customers = await self.intelligence_store.list_customer_names(org_id)
+        return taxonomy, hints, known_customers
+
+    async def _run_stages(
+        self,
+        *,
+        org_id: str,
+        text: str,
+        result: FeatureIntelligenceExtractionResult | None,
+        taxonomy: list[IntelligenceTopic],
+        hints: list[TaxonomyHint],
+        known_customers: list[tuple[str, str]],
+        resolved_customer_id: str | None = None,
+        resolved_customer_name: str | None = None,
+    ) -> ExtractionContext:
+        ctx = ExtractionContext(
+            org_id=org_id,
+            text=text,
+            result=result or FeatureIntelligenceExtractionResult(),
+            taxonomy=taxonomy,
+            taxonomy_hints=hints,
+            known_customers=known_customers,
+            resolved_customer_id=resolved_customer_id,
+            resolved_customer_name=resolved_customer_name,
+        )
+        return await run_pipeline(ctx)
 
     async def _write_mentions(
         self,
         event: CustomerSignalEvent,
         result: FeatureIntelligenceExtractionResult | None,
+        *,
+        taxonomy: list[IntelligenceTopic] | None = None,
     ) -> int:
-        if result is None or not result.feature_gaps:
+        if result is None:
+            return 0
+        if not result.feature_gaps and not result.pain_points:
             self.logger.debug(
-                "No feature gaps inferred for event %s (customer=%s)",
+                "No feature gaps or pain points inferred for event %s (customer=%s)",
                 event.external_event_id, event.customer_name,
             )
             return 0
 
         written = 0
+        existing_names = {
+            (t.kind, t.canonical_name.lower()): t for t in (taxonomy or [])
+        }
+
         for gap in result.feature_gaps:
+            if (TopicKind.FEATURE_GAP, gap.feature_name.lower()) not in existing_names:
+                topic = await self.intelligence_store.upsert_topic(
+                    IntelligenceTopic(
+                        org_id=event.org_id,
+                        kind=TopicKind.FEATURE_GAP,
+                        canonical_name=gap.feature_name,
+                    )
+                )
+                existing_names[(TopicKind.FEATURE_GAP, gap.feature_name.lower())] = topic
+
             mention = FeatureGapMentionRecord(
                 org_id=event.org_id,
                 external_customer_id=event.external_customer_id,
@@ -256,8 +369,36 @@ class CustomerIntelligenceIngestionService:
             await self.intelligence_store.upsert_feature_gap_mention(mention)
             written += 1
 
+        for pain in result.pain_points:
+            if (TopicKind.PAIN_POINT, pain.summary.lower()) not in existing_names:
+                topic = await self.intelligence_store.upsert_topic(
+                    IntelligenceTopic(
+                        org_id=event.org_id,
+                        kind=TopicKind.PAIN_POINT,
+                        canonical_name=pain.summary,
+                    )
+                )
+                existing_names[(TopicKind.PAIN_POINT, pain.summary.lower())] = topic
+
+            mention = PainPointMentionRecord(
+                org_id=event.org_id,
+                external_customer_id=event.external_customer_id,
+                topic_name=pain.summary,
+                summary=pain.summary,
+                sentiment=pain.sentiment,
+                confidence=pain.confidence,
+                excerpt=pain.excerpt,
+                source_connector=event.source_connector,
+                source_type=event.source_type,
+                external_event_id=event.external_event_id,
+                citation_url=event.citation_url,
+                occurred_at=event.occurred_at,
+            )
+            await self.intelligence_store.upsert_pain_point_mention(mention)
+            written += 1
+
         self.logger.info(
-            "✅ Ingested %d feature-gap mention(s) for customer '%s' (event %s)",
+            "✅ Ingested %d mention(s) for customer '%s' (event %s)",
             written, event.customer_name, event.external_event_id,
         )
         return written

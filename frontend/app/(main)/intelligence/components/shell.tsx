@@ -9,6 +9,7 @@ import { portal } from './theme';
 const NAV = [
   { href: '/intelligence', label: 'Overview', icon: 'insights', exact: true },
   { href: '/intelligence/feature-gaps', label: 'Feature Gaps', icon: 'extension' },
+  { href: '/intelligence/pain-points', label: 'Pain Points', icon: 'report_problem' },
   { href: '/intelligence/customers', label: 'Customers', icon: 'groups' },
 ] as const;
 

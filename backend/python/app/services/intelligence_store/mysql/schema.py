@@ -112,3 +112,47 @@ feature_gap_scores = Table(
     UniqueConstraint("org_id", "feature_name", name="uq_scores_org_feature"),
     Index("ix_scores_org_score", "org_id", "score"),
 )
+
+# Org taxonomy for pain points and feature gaps. New table only — create_all
+# never ALTERs existing tables.
+intelligence_topics = Table(
+    "intelligence_topics",
+    metadata,
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
+    Column("org_id", String(128), nullable=False),
+    Column("kind", String(32), nullable=False),  # pain_point | feature_gap
+    Column("canonical_name", String(512), nullable=False),
+    Column("aliases", JSON, nullable=True),
+    Column("guidance", Text, nullable=True),
+    Column("merged_into_id", BigInteger, nullable=True),
+    Column("updated_by", String(255), nullable=True),
+    Column("created_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    UniqueConstraint("org_id", "kind", "canonical_name", name="uq_topics_org_kind_name"),
+    Index("ix_topics_org_kind", "org_id", "kind"),
+)
+
+pain_point_mentions = Table(
+    "pain_point_mentions",
+    metadata,
+    Column("id", PrimaryKeyInt, primary_key=True, autoincrement=True),
+    Column("org_id", String(128), nullable=False),
+    Column("external_customer_id", String(191), nullable=False),
+    Column("topic_name", String(191), nullable=False),
+    Column("summary", Text, nullable=True),
+    Column("sentiment", String(32), nullable=False, default="Neutral"),
+    Column("confidence", Float, nullable=False, default=0.5),
+    Column("excerpt", Text, nullable=True),
+    Column("source_connector", String(64), nullable=False),
+    Column("source_type", String(32), nullable=False),
+    Column("external_event_id", String(191), nullable=False),
+    Column("citation_url", String(2048), nullable=True),
+    Column("occurred_at", DateTime, nullable=False),
+    Column("created_at", DateTime, nullable=False),
+    UniqueConstraint(
+        "org_id", "external_customer_id", "topic_name", "external_event_id",
+        name="uq_pain_mentions_org_customer_topic_event",
+    ),
+    Index("ix_pain_mentions_org_topic", "org_id", "topic_name"),
+    Index("ix_pain_mentions_org_topic_confidence", "org_id", "topic_name", "confidence"),
+)

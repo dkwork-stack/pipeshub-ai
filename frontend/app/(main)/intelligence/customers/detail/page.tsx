@@ -15,6 +15,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useCustomer, useSourceConnectors } from '../../api';
 import { MentionsTable } from '../../components/mentions-table';
 import {
+  ConfidenceBadge,
   ConnectorBadges,
   EmptyState,
   ErrorState,
@@ -22,7 +23,6 @@ import {
   PortalHero,
   StatStrip,
   SurfacePanel,
-  formatConfidence,
   formatCount,
   formatDate,
   formatMoney,
@@ -30,15 +30,23 @@ import {
 } from '../../components';
 
 const ALL = '__all__';
+const CONF_OPTIONS = [
+  { value: ALL, label: 'All confidence' },
+  { value: '0.5', label: '≥ 50%' },
+  { value: '0.7', label: '≥ 70%' },
+  { value: '0.9', label: '≥ 90%' },
+] as const;
 
 function CustomerDetailContent() {
   const searchParams = useSearchParams();
   const customerId = searchParams.get('id')?.trim() || null;
   const [connector, setConnector] = useState('');
+  const [minConfidence, setMinConfidence] = useState('');
 
   const { data: connectors } = useSourceConnectors();
   const { data, error, isLoading, mutate } = useCustomer(customerId, {
     source_connector: connector || undefined,
+    min_confidence: minConfidence ? Number(minConfidence) : undefined,
   });
 
   const revenue = data?.latest_revenue ?? null;
@@ -123,7 +131,7 @@ function CustomerDetailContent() {
                   <Table.Row>
                     <Table.ColumnHeaderCell>Feature</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Max confidence</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell>Last mentioned</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell>Sources</Table.ColumnHeaderCell>
                   </Table.Row>
@@ -139,7 +147,48 @@ function CustomerDetailContent() {
                         </Link>
                       </Table.RowHeaderCell>
                       <Table.Cell align="right">{formatCount(i.mention_count)}</Table.Cell>
-                      <Table.Cell align="right">{formatConfidence(i.max_confidence)}</Table.Cell>
+                      <Table.Cell align="right">
+                        <ConfidenceBadge value={i.max_confidence} />
+                      </Table.Cell>
+                      <Table.Cell>{formatDate(i.last_mentioned_at)}</Table.Cell>
+                      <Table.Cell>
+                        <ConnectorBadges connectors={i.source_connectors} />
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            )}
+          </SurfacePanel>
+
+          <SurfacePanel title="Pain points">
+            {(data.pain_point_insights ?? []).length === 0 ? (
+              <EmptyState icon="report_problem" title="No pain points recorded" />
+            ) : (
+              <Table.Root size="1">
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeaderCell>Pain point</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Last mentioned</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Sources</Table.ColumnHeaderCell>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {(data.pain_point_insights ?? []).map((i) => (
+                    <Table.Row key={i.topic_name}>
+                      <Table.RowHeaderCell>
+                        <Link href={`/intelligence/pain-points/detail?name=${encodeURIComponent(i.topic_name)}`}>
+                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                            {i.topic_name}
+                          </Text>
+                        </Link>
+                      </Table.RowHeaderCell>
+                      <Table.Cell align="right">{formatCount(i.mention_count)}</Table.Cell>
+                      <Table.Cell align="right">
+                        <ConfidenceBadge value={i.max_confidence} />
+                      </Table.Cell>
                       <Table.Cell>{formatDate(i.last_mentioned_at)}</Table.Cell>
                       <Table.Cell>
                         <ConnectorBadges connectors={i.source_connectors} />
@@ -154,17 +203,33 @@ function CustomerDetailContent() {
           <SurfacePanel
             title="Evidence"
             action={
-              <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                <Select.Trigger style={{ minWidth: 150 }} />
-                <Select.Content>
-                  <Select.Item value={ALL}>All sources</Select.Item>
-                  {(connectors ?? []).map((c) => (
-                    <Select.Item key={c} value={c}>
-                      {c}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
+              <Flex gap="2">
+                <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
+                  <Select.Trigger style={{ minWidth: 150 }} />
+                  <Select.Content>
+                    <Select.Item value={ALL}>All sources</Select.Item>
+                    {(connectors ?? []).map((c) => (
+                      <Select.Item key={c} value={c}>
+                        {c}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+                <Select.Root
+                  size="1"
+                  value={minConfidence || ALL}
+                  onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
+                >
+                  <Select.Trigger style={{ minWidth: 130 }} />
+                  <Select.Content>
+                    {CONF_OPTIONS.map((o) => (
+                      <Select.Item key={o.value} value={o.value}>
+                        {o.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </Flex>
             }
           >
             <MentionsTable mentions={data.mentions} showCustomer={false} />

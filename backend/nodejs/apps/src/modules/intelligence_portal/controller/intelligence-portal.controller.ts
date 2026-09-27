@@ -123,6 +123,64 @@ export const getFeatureGap = forwardGet(
   'Get Feature Gap',
 );
 
+export const searchPainPoints = forwardGet(
+  () => `${PORTAL_BASE}/pain-points`,
+  'Search Pain Points',
+);
+export const getPainPoint = forwardGet(
+  (req) => `${PORTAL_BASE}/pain-points/${encParam(req.params.topicName)}`,
+  'Get Pain Point',
+);
+
+export const listTopics = forwardGet(
+  () => `${PORTAL_BASE}/topics`,
+  'List Intelligence Topics',
+);
+export const getTopic = forwardGet(
+  (req) => `${PORTAL_BASE}/topics/${encParam(req.params.topicId)}`,
+  'Get Intelligence Topic',
+);
+
+function forwardMutating(
+  method: 'PATCH' | 'POST',
+  pathBuilder: PathBuilder,
+  action: string,
+) {
+  return (appConfig: AppConfig) =>
+    async (
+      req: AuthenticatedUserRequest,
+      res: Response,
+      next: NextFunction,
+    ): Promise<void> => {
+      try {
+        const requestConfig: AxiosRequestConfig = {
+          url: `${appConfig.intelligenceBackend}${pathBuilder(req)}`,
+          method,
+          params: req.query,
+          data: req.body,
+          headers: buildForwardHeaders(req),
+          timeout: UPSTREAM_TIMEOUT_MS,
+          validateStatus: () => true,
+        };
+        const response: AxiosResponse = await axios.request(requestConfig);
+        res.status(response.status).json(response.data);
+      } catch (error) {
+        next(mapAxiosError(error, action));
+      }
+    };
+}
+
+export const updateTopic = forwardMutating(
+  'PATCH',
+  (req) => `${PORTAL_BASE}/topics/${encParam(req.params.topicId)}`,
+  'Update Intelligence Topic',
+);
+export const mergeTopic = forwardMutating(
+  'POST',
+  (req) => `${PORTAL_BASE}/topics/${encParam(req.params.topicId)}/merge`,
+  'Merge Intelligence Topic',
+);
+
 export const searchCustomers = forwardGet(
   () => `${PORTAL_BASE}/customers`,
   'Search Intelligence Customers',

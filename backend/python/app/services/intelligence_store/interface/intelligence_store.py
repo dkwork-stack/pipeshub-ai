@@ -14,6 +14,10 @@ from app.models.intelligence import (
     CustomerRevenueSnapshot,
     FeatureGapMentionRecord,
     FeatureGapScore,
+    IntelligenceTopic,
+    PainPointMentionRecord,
+    TopicGuidanceUpdate,
+    TopicKind,
 )
 
 
@@ -45,6 +49,45 @@ class IIntelligenceStore(ABC):
     @abstractmethod
     async def upsert_feature_gap_mention(self, mention: FeatureGapMentionRecord) -> None:
         """Idempotently record one (customer, feature_gap, source event) mention."""
+        ...
+
+    @abstractmethod
+    async def upsert_pain_point_mention(self, mention: PainPointMentionRecord) -> None:
+        """Idempotently record one (customer, pain_point, source event) mention."""
+        ...
+
+    @abstractmethod
+    async def list_topics(
+        self, org_id: str, kind: Optional[TopicKind] = None, *, include_merged: bool = False
+    ) -> list[IntelligenceTopic]:
+        """List taxonomy topics for an org, optionally filtered by kind."""
+        ...
+
+    @abstractmethod
+    async def get_topic(self, org_id: str, topic_id: int) -> Optional[IntelligenceTopic]:
+        """Return one taxonomy topic, or None if missing / wrong org."""
+        ...
+
+    @abstractmethod
+    async def upsert_topic(self, topic: IntelligenceTopic) -> IntelligenceTopic:
+        """Create or update a taxonomy topic by (org, kind, canonical_name)."""
+        ...
+
+    @abstractmethod
+    async def update_topic_guidance(
+        self, org_id: str, topic_id: int, update_payload: TopicGuidanceUpdate
+    ) -> Optional[IntelligenceTopic]:
+        """Patch guidance / aliases / canonical_name on an existing topic."""
+        ...
+
+    @abstractmethod
+    async def merge_topics(self, org_id: str, source_id: int, target_id: int) -> Optional[IntelligenceTopic]:
+        """Rewrite mentions from source onto target, then mark source as merged."""
+        ...
+
+    @abstractmethod
+    async def list_customer_names(self, org_id: str, limit: int = 500) -> list[tuple[str, str]]:
+        """Return ``(external_customer_id, customer_name)`` pairs for customer resolution."""
         ...
 
     @abstractmethod

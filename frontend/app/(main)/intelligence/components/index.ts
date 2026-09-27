@@ -12,3 +12,6 @@ export {
 } from './states';
 export { FiltersBar, PaginationBar } from './filters';
 export { formatConfidence, formatCount, formatDate, formatMoney, formatScore } from './format';
+export { ConfidenceBadge, CONFIDENCE_THRESHOLD } from './confidence-badge';
+export { TopicGuidancePanel } from './topic-guidance-panel';
+export { MentionsTable } from './mentions-table';

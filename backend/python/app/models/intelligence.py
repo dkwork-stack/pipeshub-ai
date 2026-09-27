@@ -61,6 +61,13 @@ class CustomerRevenueSnapshot(BaseModel):
     snapshot_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class TopicKind(str, Enum):
+    """Discriminates pain-point vs feature-gap topics in the org taxonomy."""
+
+    PAIN_POINT = "pain_point"
+    FEATURE_GAP = "feature_gap"
+
+
 class PainPoint(BaseModel):
     """A single inferred customer pain point, with evidence."""
 
@@ -68,6 +75,10 @@ class PainPoint(BaseModel):
     sentiment: str = Field(default="Neutral", description="Positive | Neutral | Negative")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     excerpt: str = Field(..., description="Verbatim excerpt from the source text supporting this pain point")
+    topic_id: Optional[str] = Field(
+        default=None,
+        description="Id of a known taxonomy topic when the item matches one; null for a new proposal",
+    )
 
 
 class FeatureGapCandidate(BaseModel):
@@ -77,6 +88,20 @@ class FeatureGapCandidate(BaseModel):
     description: str = Field(..., description="What the customer is asking for and why")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     excerpt: str = Field(..., description="Verbatim excerpt from the source text supporting this feature gap")
+    topic_id: Optional[str] = Field(
+        default=None,
+        description="Id of a known taxonomy topic when the item matches one; null for a new proposal",
+    )
+
+
+class TaxonomyHint(BaseModel):
+    """Compact topic hint injected into the extraction prompt."""
+
+    id: str
+    kind: TopicKind
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    guidance: Optional[str] = None
 
 
 class FeatureIntelligenceExtractionResult(BaseModel):
@@ -106,6 +131,53 @@ class FeatureGapMentionRecord(BaseModel):
     occurred_at: datetime
 
 
+class PainPointMentionRecord(BaseModel):
+    """A stored, citation-carrying link between one customer and one pain point."""
+
+    org_id: str
+    external_customer_id: str
+    topic_name: str
+    summary: str
+    sentiment: str = "Neutral"
+    confidence: float
+    excerpt: str
+    source_connector: str
+    source_type: SignalSourceType
+    external_event_id: str
+    citation_url: Optional[str] = None
+    occurred_at: datetime
+
+
+class IntelligenceTopic(BaseModel):
+    """Org-scoped taxonomy entry for a pain point or feature gap."""
+
+    id: Optional[int] = None
+    org_id: str
+    kind: TopicKind
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list)
+    guidance: Optional[str] = None
+    merged_into_id: Optional[int] = None
+    updated_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class TopicGuidanceUpdate(BaseModel):
+    """Partial update for a topic's guidance and aliases."""
+
+    guidance: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    canonical_name: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class TopicMergeRequest(BaseModel):
+    """Merge ``source`` topic into ``target`` (target keeps the canonical name)."""
+
+    target_id: int
+
+
 class FeatureGapScore(BaseModel):
     """Revenue-weighted priority score for one feature gap, for CPO/PM consumption."""
 
@@ -117,6 +189,9 @@ class FeatureGapScore(BaseModel):
     mention_count: int
     score: float
     top_customers: list[str] = Field(default_factory=list)
+    max_confidence: Optional[float] = None
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +208,18 @@ class FeatureGapFilter(BaseModel):
     min_arr: Optional[float] = Field(default=None, ge=0, description="Only gaps with at least this much ARR at stake")
     source_connector: Optional[str] = Field(default=None, description="Only gaps with a mention from this connector")
     external_customer_id: Optional[str] = Field(default=None, description="Only gaps mentioned by this customer")
+    min_confidence: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0, description="Only gaps/mentions with at least this confidence"
+    )
+
+
+class PainPointFilter(BaseModel):
+    """Filter/search criteria for pain-point listings."""
+
+    query: Optional[str] = Field(default=None, description="Case-insensitive substring match on topic name")
+    source_connector: Optional[str] = Field(default=None)
+    external_customer_id: Optional[str] = Field(default=None)
+    min_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class CustomerFilter(BaseModel):
@@ -148,6 +235,7 @@ class MentionFilter(BaseModel):
 
     external_customer_id: Optional[str] = None
     source_connector: Optional[str] = None
+    min_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class RevenueSummary(BaseModel):
@@ -169,8 +257,44 @@ class CustomerInsight(BaseModel):
     feature_name: str
     mention_count: int
     max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
     last_mentioned_at: datetime
     source_connectors: list[str] = Field(default_factory=list)
+
+
+class PainPointInsight(BaseModel):
+    """One pain point as seen from a single customer (aggregated over its mentions)."""
+
+    topic_name: str
+    mention_count: int
+    max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
+    last_mentioned_at: datetime
+    source_connectors: list[str] = Field(default_factory=list)
+    sentiments: list[str] = Field(default_factory=list)
+
+
+class PainPointScore(BaseModel):
+    """Org-level roll-up for one pain-point topic."""
+
+    org_id: str
+    topic_name: str
+    customer_count: int
+    mention_count: int
+    max_confidence: float
+    avg_confidence: Optional[float] = None
+    low_confidence_count: int = 0
+    top_customers: list[str] = Field(default_factory=list)
+
+
+class PainPointDetail(BaseModel):
+    """Pain-point detail: score + affected customers + evidence."""
+
+    score: PainPointScore
+    affected_customers: list["AffectedCustomer"] = Field(default_factory=list)
+    mentions: list[PainPointMentionRecord] = Field(default_factory=list)
 
 
 class CustomerSummary(BaseModel):
@@ -188,7 +312,9 @@ class CustomerDetail(CustomerSummary):
     """Customer detail: everything in the summary plus all insights and citations."""
 
     insights: list[CustomerInsight] = Field(default_factory=list)
+    pain_point_insights: list[PainPointInsight] = Field(default_factory=list)
     mentions: list[FeatureGapMentionRecord] = Field(default_factory=list)
+    pain_point_mentions: list[PainPointMentionRecord] = Field(default_factory=list)
 
 
 class AffectedCustomer(BaseModel):

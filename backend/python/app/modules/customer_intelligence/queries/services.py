@@ -17,14 +17,27 @@ from app.api.schemas.intelligence_portal import (
     FeatureGapResponse,
     OverviewResponse,
     Page,
+    PainPointDetailResponse,
+    PainPointResponse,
     SourceConnectorsResponse,
+    TopicResponse,
 )
-from app.models.intelligence import CustomerFilter, FeatureGapFilter, MentionFilter
+from app.models.intelligence import (
+    CustomerFilter,
+    FeatureGapFilter,
+    MentionFilter,
+    PainPointFilter,
+    TopicGuidanceUpdate,
+    TopicKind,
+)
 from app.modules.customer_intelligence.queries import mappers
 
 if TYPE_CHECKING:
     from app.services.intelligence_store.interface.intelligence_query_repository import (
         IIntelligenceQueryRepository,
+    )
+    from app.services.intelligence_store.interface.intelligence_store import (
+        IIntelligenceStore,
     )
 
 DEFAULT_PAGE_SIZE = 25
@@ -72,6 +85,7 @@ class FeatureGapQueryService:
         min_arr: Optional[float] = None,
         source_connector: Optional[str] = None,
         external_customer_id: Optional[str] = None,
+        min_confidence: Optional[float] = None,
         pagination: Pagination = Pagination(),
     ) -> Page[FeatureGapResponse]:
         page = pagination.clamped()
@@ -80,6 +94,7 @@ class FeatureGapQueryService:
             min_arr=min_arr,
             source_connector=_clean(source_connector),
             external_customer_id=_clean(external_customer_id),
+            min_confidence=min_confidence,
         )
         items, total = await self._repo.search_feature_gaps(org_id, filters, limit=page.limit, offset=page.offset)
         return mappers.page_of(
@@ -93,13 +108,110 @@ class FeatureGapQueryService:
         *,
         external_customer_id: Optional[str] = None,
         source_connector: Optional[str] = None,
+        min_confidence: Optional[float] = None,
     ) -> Optional[FeatureGapDetailResponse]:
         mention_filter = MentionFilter(
             external_customer_id=_clean(external_customer_id),
             source_connector=_clean(source_connector),
+            min_confidence=min_confidence,
         )
         detail = await self._repo.get_feature_gap(org_id, feature_name, mention_filter)
         return mappers.feature_gap_detail_response(detail) if detail else None
+
+
+class PainPointQueryService:
+    def __init__(self, repository: IIntelligenceQueryRepository) -> None:
+        self._repo = repository
+
+    async def search(
+        self,
+        org_id: str,
+        *,
+        query: Optional[str] = None,
+        source_connector: Optional[str] = None,
+        external_customer_id: Optional[str] = None,
+        min_confidence: Optional[float] = None,
+        pagination: Pagination = Pagination(),
+    ) -> Page[PainPointResponse]:
+        page = pagination.clamped()
+        filters = PainPointFilter(
+            query=_clean(query),
+            source_connector=_clean(source_connector),
+            external_customer_id=_clean(external_customer_id),
+            min_confidence=min_confidence,
+        )
+        items, total = await self._repo.search_pain_points(
+            org_id, filters, limit=page.limit, offset=page.offset
+        )
+        return mappers.page_of(
+            [mappers.pain_point_response(s) for s in items],
+            total,
+            limit=page.limit,
+            offset=page.offset,
+        )
+
+    async def get(
+        self,
+        org_id: str,
+        topic_name: str,
+        *,
+        external_customer_id: Optional[str] = None,
+        source_connector: Optional[str] = None,
+        min_confidence: Optional[float] = None,
+    ) -> Optional[PainPointDetailResponse]:
+        mention_filter = MentionFilter(
+            external_customer_id=_clean(external_customer_id),
+            source_connector=_clean(source_connector),
+            min_confidence=min_confidence,
+        )
+        detail = await self._repo.get_pain_point(org_id, topic_name, mention_filter)
+        return mappers.pain_point_detail_response(detail) if detail else None
+
+
+class TopicService:
+    """Read + write taxonomy topics (guidance / aliases / merge)."""
+
+    def __init__(self, store: "IIntelligenceStore") -> None:
+        self._store = store
+
+    async def list_topics(
+        self, org_id: str, *, kind: Optional[str] = None
+    ) -> list[TopicResponse]:
+        topic_kind = TopicKind(kind) if kind else None
+        topics = await self._store.list_topics(org_id, topic_kind)
+        return [mappers.topic_response(t) for t in topics]
+
+    async def get_topic(self, org_id: str, topic_id: int) -> Optional[TopicResponse]:
+        topic = await self._store.get_topic(org_id, topic_id)
+        return mappers.topic_response(topic) if topic else None
+
+    async def update_topic(
+        self,
+        org_id: str,
+        topic_id: int,
+        *,
+        guidance: Optional[str] = None,
+        aliases: Optional[list[str]] = None,
+        canonical_name: Optional[str] = None,
+        updated_by: Optional[str] = None,
+    ) -> Optional[TopicResponse]:
+        topic = await self._store.update_topic_guidance(
+            org_id,
+            topic_id,
+            TopicGuidanceUpdate(
+                guidance=guidance,
+                aliases=aliases,
+                canonical_name=canonical_name,
+                updated_by=updated_by,
+            ),
+        )
+        return mappers.topic_response(topic) if topic else None
+
+    async def merge_topics(
+        self, org_id: str, source_id: int, target_id: int
+    ) -> Optional[TopicResponse]:
+        topic = await self._store.merge_topics(org_id, source_id, target_id)
+        return mappers.topic_response(topic) if topic else None
 
 
 class CustomerQueryService:
@@ -131,8 +243,14 @@ class CustomerQueryService:
         external_customer_id: str,
         *,
         source_connector: Optional[str] = None,
+        min_confidence: Optional[float] = None,
     ) -> Optional[CustomerDetailResponse]:
         detail = await self._repo.get_customer(
-            org_id, external_customer_id, MentionFilter(source_connector=_clean(source_connector))
+            org_id,
+            external_customer_id,
+            MentionFilter(
+                source_connector=_clean(source_connector),
+                min_confidence=min_confidence,
+            ),
         )
         return mappers.customer_detail_response(detail) if detail else None

@@ -16,10 +16,10 @@ import logging
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.blocks import BlocksContainer
-from app.models.intelligence import FeatureIntelligenceExtractionResult
+from app.models.intelligence import FeatureIntelligenceExtractionResult, TaxonomyHint
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,8 @@ class FeatureIntelligenceRequest(BaseModel):
     text: str
     org_id: str
     infer_customer: bool = False
+    taxonomy: list[TaxonomyHint] = Field(default_factory=list)
+    known_customers: list[str] = Field(default_factory=list)
 
 
 class FeatureIntelligenceResponse(BaseModel):
@@ -139,7 +141,11 @@ async def extract_feature_intelligence(
 
     try:
         result: FeatureIntelligenceExtractionResult | None = await extractor.extract(
-            text=body.text, org_id=body.org_id, infer_customer=body.infer_customer
+            text=body.text,
+            org_id=body.org_id,
+            infer_customer=body.infer_customer,
+            taxonomy=body.taxonomy,
+            known_customers=body.known_customers,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(

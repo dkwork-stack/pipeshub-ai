@@ -28,8 +28,21 @@ export type CustomerInsight = {
   feature_name: string;
   mention_count: number;
   max_confidence: number | null;
+  avg_confidence?: number | null;
+  low_confidence_count?: number;
   last_mentioned_at: string | null;
   source_connectors: string[];
+};
+
+export type PainPointInsight = {
+  topic_name: string;
+  mention_count: number;
+  max_confidence: number | null;
+  avg_confidence?: number | null;
+  low_confidence_count?: number;
+  last_mentioned_at: string | null;
+  source_connectors: string[];
+  sentiments: string[];
 };
 
 export type CustomerSummary = {
@@ -54,9 +67,25 @@ export type Mention = {
   occurred_at: string | null;
 };
 
+export type PainPointMention = {
+  external_customer_id: string;
+  topic_name: string;
+  summary: string;
+  sentiment: string;
+  confidence: number | null;
+  excerpt: string | null;
+  source_connector: string;
+  source_type: string | null;
+  external_event_id: string | null;
+  citation_url: string | null;
+  occurred_at: string | null;
+};
+
 export type CustomerDetail = CustomerSummary & {
   insights: CustomerInsight[];
+  pain_point_insights: PainPointInsight[];
   mentions: Mention[];
+  pain_point_mentions: PainPointMention[];
 };
 
 export type AffectedCustomer = {
@@ -76,6 +105,19 @@ export type FeatureGap = {
   score: number;
   /** Customer display names (not full customer objects). */
   top_customers: string[];
+  max_confidence?: number | null;
+  avg_confidence?: number | null;
+  low_confidence_count?: number;
+};
+
+export type PainPoint = {
+  topic_name: string;
+  customer_count: number;
+  mention_count: number;
+  max_confidence: number;
+  avg_confidence?: number | null;
+  low_confidence_count?: number;
+  top_customers: string[];
 };
 
 export type SourceConnectorsResponse = {
@@ -85,6 +127,23 @@ export type SourceConnectorsResponse = {
 export type FeatureGapDetail = FeatureGap & {
   affected_customers: AffectedCustomer[];
   mentions: Mention[];
+};
+
+export type PainPointDetail = PainPoint & {
+  affected_customers: AffectedCustomer[];
+  mentions: PainPointMention[];
+};
+
+export type IntelligenceTopic = {
+  id: number;
+  kind: 'pain_point' | 'feature_gap';
+  canonical_name: string;
+  aliases: string[];
+  guidance: string | null;
+  merged_into_id: number | null;
+  updated_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export type IntelligenceOverview = {
@@ -104,6 +163,7 @@ export type ListFilters = {
   min_arr?: number;
   source_connector?: string;
   customer_id?: string;
+  min_confidence?: number;
   limit?: number;
   offset?: number;
 };
@@ -111,4 +171,5 @@ export type ListFilters = {
 export type MentionFilters = {
   customer_id?: string;
   source_connector?: string;
+  min_confidence?: number;
 };

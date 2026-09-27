@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { Badge, Flex, Link as RadixLink, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { Mention } from '../types';
-import { formatConfidence, formatDate } from './format';
+import { ConfidenceBadge } from './confidence-badge';
+import { formatDate } from './format';
 import { EmptyState } from './states';
 
 export function MentionsTable({
@@ -95,7 +96,7 @@ export function MentionsTable({
               </Flex>
             </Table.Cell>
             <Table.Cell align="right">
-              <Text size="2">{formatConfidence(m.confidence)}</Text>
+              <ConfidenceBadge value={m.confidence} />
             </Table.Cell>
             <Table.Cell>
               <Text size="2" style={{ whiteSpace: 'nowrap' }}>

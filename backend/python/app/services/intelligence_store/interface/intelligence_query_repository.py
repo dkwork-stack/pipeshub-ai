@@ -20,6 +20,9 @@ if TYPE_CHECKING:
         FeatureGapScore,
         IntelligenceOverview,
         MentionFilter,
+        PainPointDetail,
+        PainPointFilter,
+        PainPointScore,
     )
 
 
@@ -43,6 +46,20 @@ class IIntelligenceQueryRepository(ABC):
         self, org_id: str, feature_name: str, mention_filter: MentionFilter
     ) -> Optional[FeatureGapDetail]:
         """One feature gap with affected customers and (filtered) citations; None if unknown."""
+        ...
+
+    @abstractmethod
+    async def search_pain_points(
+        self, org_id: str, filters: PainPointFilter, *, limit: int, offset: int
+    ) -> tuple[list[PainPointScore], int]:
+        """Pain-point topics matching ``filters`` plus the total match count."""
+        ...
+
+    @abstractmethod
+    async def get_pain_point(
+        self, org_id: str, topic_name: str, mention_filter: MentionFilter
+    ) -> Optional[PainPointDetail]:
+        """One pain point with affected customers and (filtered) citations; None if unknown."""
         ...
 
     @abstractmethod

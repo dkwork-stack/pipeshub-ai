@@ -17,6 +17,7 @@ from app.models.blocks import Block, BlocksContainer, BlockType, DataFormat
 from app.models.intelligence import (
     FeatureGapCandidate,
     FeatureIntelligenceExtractionResult,
+    IntelligenceTopic,
 )
 from app.modules.customer_intelligence.ingestion_service import (
     UPLOAD_SOURCE_CONNECTOR,
@@ -30,13 +31,31 @@ class _FakeStore:
     def __init__(self) -> None:
         self.customers: list[tuple[str, str, str]] = []
         self.mentions = []
+        self.pain_mentions = []
+        self.topics: list[IntelligenceTopic] = []
         self.recompute_calls: list[tuple[str, list[str] | None]] = []
+        self._topic_id = 1
 
     async def upsert_customer(self, org_id, external_customer_id, customer_name) -> None:
         self.customers.append((org_id, external_customer_id, customer_name))
 
     async def upsert_feature_gap_mention(self, mention) -> None:
         self.mentions.append(mention)
+
+    async def upsert_pain_point_mention(self, mention) -> None:
+        self.pain_mentions.append(mention)
+
+    async def list_topics(self, org_id, kind=None, *, include_merged: bool = False):
+        return list(self.topics)
+
+    async def list_customer_names(self, org_id, limit: int = 500):
+        return [(cid, name) for _, cid, name in self.customers]
+
+    async def upsert_topic(self, topic: IntelligenceTopic) -> IntelligenceTopic:
+        topic = topic.model_copy(update={"id": self._topic_id})
+        self._topic_id += 1
+        self.topics.append(topic)
+        return topic
 
     async def recompute_feature_gap_scores(self, org_id, feature_names=None) -> None:
         self.recompute_calls.append((org_id, feature_names))
@@ -48,15 +67,29 @@ class _FakeExtractionClient:
         self.calls: list[dict] = []
 
     async def extract_feature_intelligence(
-        self, text: str, org_id: str, *, infer_customer: bool = False
+        self,
+        text: str,
+        org_id: str,
+        *,
+        infer_customer: bool = False,
+        taxonomy=None,
+        known_customers=None,
     ) -> FeatureIntelligenceExtractionResult:
-        self.calls.append({"text": text, "org_id": org_id, "infer_customer": infer_customer})
+        self.calls.append(
+            {
+                "text": text,
+                "org_id": org_id,
+                "infer_customer": infer_customer,
+                "taxonomy": taxonomy or [],
+                "known_customers": known_customers or [],
+            }
+        )
         return self.results.get(text, FeatureIntelligenceExtractionResult())
 
 
-def _gap(name: str) -> FeatureGapCandidate:
+def _gap(name: str, excerpt: str) -> FeatureGapCandidate:
     return FeatureGapCandidate(
-        feature_name=name, description=f"needs {name}", confidence=0.9, excerpt=name
+        feature_name=name, description=f"needs {name}", confidence=0.9, excerpt=excerpt
     )
 
 
@@ -104,10 +137,12 @@ async def test_csv_upload_is_ingested_row_by_row_with_inferred_customers() -> No
     client = _FakeExtractionClient(
         {
             row_a: FeatureIntelligenceExtractionResult(
-                feature_gaps=[_gap("Bulk CSV export")], customer_name="Acme"
+                feature_gaps=[_gap("Bulk CSV export", "can't export in bulk")],
+                customer_name="Acme",
             ),
             row_b: FeatureIntelligenceExtractionResult(
-                feature_gaps=[_gap("SSO / SAML support")], customer_name="Globex"
+                feature_gaps=[_gap("SSO / SAML support", "Need SSO")],
+                customer_name="Globex",
             ),
         }
     )
@@ -132,7 +167,7 @@ async def test_document_upload_is_one_event_and_falls_back_to_file_name() -> Non
     para1, para2 = "Meeting notes.", "They need an audit log feature."
     joined = f"{para1}\n{para2}"
     client = _FakeExtractionClient(
-        {joined: FeatureIntelligenceExtractionResult(feature_gaps=[_gap("Audit log")])}
+        {joined: FeatureIntelligenceExtractionResult(feature_gaps=[_gap("Audit log", "audit log feature")])}
     )
     svc, store = _service(client)
 
@@ -197,10 +232,10 @@ async def test_one_unit_failure_does_not_drop_sibling_writes() -> None:
     client = _FakeExtractionClient(
         {
             ok: FeatureIntelligenceExtractionResult(
-                feature_gaps=[_gap("SSO")], customer_name="Acme"
+                feature_gaps=[_gap("SSO", "Need SSO")], customer_name="Acme"
             ),
             boom: FeatureIntelligenceExtractionResult(
-                feature_gaps=[_gap("Audit log")], customer_name="Globex"
+                feature_gaps=[_gap("Audit log", "Need audit log")], customer_name="Globex"
             ),
         }
     )

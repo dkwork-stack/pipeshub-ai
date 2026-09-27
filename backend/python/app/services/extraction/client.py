@@ -96,6 +96,8 @@ class ExtractionClient(BaseServiceClient):
         org_id: str,
         *,
         infer_customer: bool = False,
+        taxonomy: "list | None" = None,
+        known_customers: "list[str] | None" = None,
     ) -> "FeatureIntelligenceExtractionResult | None":
         """Call ``POST /api/v1/extract/feature-intelligence``.
 
@@ -103,13 +105,30 @@ class ExtractionClient(BaseServiceClient):
         CustomerSignalEvent's text, or ``None`` on an explicit failure
         response (raises :class:`ExtractionClientError` in that case, mirroring
         :meth:`classify`). ``infer_customer`` additionally asks the LLM for the
-        customer name, for sources (uploads) that carry none.
+        customer name, for sources (uploads) that carry none. ``taxonomy`` and
+        ``known_customers`` are optional prompt hints loaded by the caller.
         """
         from app.models.intelligence import (  # noqa: PLC0415
             FeatureIntelligenceExtractionResult,
+            TaxonomyHint,
         )
 
-        payload = {"text": text, "org_id": org_id, "infer_customer": infer_customer}
+        taxonomy_payload = []
+        for hint in taxonomy or []:
+            if isinstance(hint, TaxonomyHint):
+                taxonomy_payload.append(hint.model_dump())
+            elif isinstance(hint, dict):
+                taxonomy_payload.append(hint)
+            else:
+                taxonomy_payload.append(TaxonomyHint.model_validate(hint).model_dump())
+
+        payload = {
+            "text": text,
+            "org_id": org_id,
+            "infer_customer": infer_customer,
+            "taxonomy": taxonomy_payload,
+            "known_customers": list(known_customers or []),
+        }
         response = await self._post_json(
             "/api/v1/extract/feature-intelligence",
             payload,

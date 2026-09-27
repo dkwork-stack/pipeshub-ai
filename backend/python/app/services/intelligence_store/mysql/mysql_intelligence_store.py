@@ -13,7 +13,7 @@ from datetime import datetime
 from logging import Logger
 from typing import Dict, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -21,6 +21,10 @@ from app.models.intelligence import (
     CustomerRevenueSnapshot,
     FeatureGapMentionRecord,
     FeatureGapScore,
+    IntelligenceTopic,
+    PainPointMentionRecord,
+    TopicGuidanceUpdate,
+    TopicKind,
 )
 from app.modules.customer_intelligence.scoring import compute_feature_gap_score
 from app.services.intelligence_store.interface.intelligence_store import (
@@ -31,9 +35,30 @@ from app.services.intelligence_store.mysql.schema import (
     feature_gap_mentions,
     feature_gap_scores,
     feature_gaps,
+    intelligence_topics,
     metadata,
+    pain_point_mentions,
     revenue_snapshots,
 )
+
+# Mentions below this confidence still persist and remain visible in the UI,
+# but they do not contribute to revenue-weighted feature-gap scores.
+_SCORE_MIN_CONFIDENCE = float(__import__("os").getenv("INTELLIGENCE_SCORE_MIN_CONFIDENCE", "0.5"))
+
+
+def _topic_from_row(r) -> IntelligenceTopic:
+    return IntelligenceTopic(
+        id=r["id"],
+        org_id=r["org_id"],
+        kind=TopicKind(r["kind"]),
+        canonical_name=r["canonical_name"],
+        aliases=list(r["aliases"] or []),
+        guidance=r["guidance"],
+        merged_into_id=r["merged_into_id"],
+        updated_by=r["updated_by"],
+        created_at=r["created_at"],
+        updated_at=r["updated_at"],
+    )
 
 
 class MySQLIntelligenceStore(IIntelligenceStore):
@@ -163,15 +188,303 @@ class MySQLIntelligenceStore(IIntelligenceStore):
                 occurred_at=mention.occurred_at,
                 created_at=now,
             )
-            # Re-processing the same source event is a no-op, not a duplicate row.
+            # Re-processing the same source event keeps the higher confidence.
             mention_stmt = mention_stmt.on_duplicate_key_update(
                 description=mention_stmt.inserted.description,
-                confidence=mention_stmt.inserted.confidence,
+                confidence=func.greatest(
+                    feature_gap_mentions.c.confidence, mention_stmt.inserted.confidence
+                ),
                 excerpt=mention_stmt.inserted.excerpt,
             )
             await conn.execute(mention_stmt)
 
         await self.recompute_feature_gap_scores(mention.org_id, [mention.feature_name])
+
+    async def upsert_pain_point_mention(self, mention: PainPointMentionRecord) -> None:
+        now = datetime.utcnow()
+        async with self.engine.begin() as conn:
+            topic = IntelligenceTopic(
+                org_id=mention.org_id,
+                kind=TopicKind.PAIN_POINT,
+                canonical_name=mention.topic_name,
+            )
+            await self._upsert_topic_conn(conn, topic)
+
+            mention_stmt = mysql_insert(pain_point_mentions).values(
+                org_id=mention.org_id,
+                external_customer_id=mention.external_customer_id,
+                topic_name=mention.topic_name[:191],
+                summary=mention.summary,
+                sentiment=mention.sentiment,
+                confidence=mention.confidence,
+                excerpt=mention.excerpt,
+                source_connector=mention.source_connector,
+                source_type=mention.source_type.value,
+                external_event_id=mention.external_event_id,
+                citation_url=mention.citation_url,
+                occurred_at=mention.occurred_at,
+                created_at=now,
+            )
+            mention_stmt = mention_stmt.on_duplicate_key_update(
+                summary=mention_stmt.inserted.summary,
+                sentiment=mention_stmt.inserted.sentiment,
+                confidence=func.greatest(
+                    pain_point_mentions.c.confidence, mention_stmt.inserted.confidence
+                ),
+                excerpt=mention_stmt.inserted.excerpt,
+            )
+            await conn.execute(mention_stmt)
+
+    async def list_topics(
+        self, org_id: str, kind: Optional[TopicKind] = None, *, include_merged: bool = False
+    ) -> list[IntelligenceTopic]:
+        conds = [intelligence_topics.c.org_id == org_id]
+        if kind is not None:
+            conds.append(intelligence_topics.c.kind == kind.value)
+        if not include_merged:
+            conds.append(intelligence_topics.c.merged_into_id.is_(None))
+        async with self.engine.begin() as conn:
+            rows = (
+                await conn.execute(
+                    select(intelligence_topics)
+                    .where(*conds)
+                    .order_by(intelligence_topics.c.canonical_name)
+                )
+            ).mappings().all()
+        return [_topic_from_row(r) for r in rows]
+
+    async def get_topic(self, org_id: str, topic_id: int) -> Optional[IntelligenceTopic]:
+        async with self.engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    select(intelligence_topics).where(
+                        intelligence_topics.c.org_id == org_id,
+                        intelligence_topics.c.id == topic_id,
+                    )
+                )
+            ).mappings().first()
+        return _topic_from_row(row) if row else None
+
+    async def upsert_topic(self, topic: IntelligenceTopic) -> IntelligenceTopic:
+        async with self.engine.begin() as conn:
+            return await self._upsert_topic_conn(conn, topic)
+
+    async def _upsert_topic_conn(self, conn, topic: IntelligenceTopic) -> IntelligenceTopic:
+        now = datetime.utcnow()
+        stmt = mysql_insert(intelligence_topics).values(
+            org_id=topic.org_id,
+            kind=topic.kind.value if isinstance(topic.kind, TopicKind) else topic.kind,
+            canonical_name=topic.canonical_name,
+            aliases=topic.aliases or [],
+            guidance=topic.guidance,
+            merged_into_id=topic.merged_into_id,
+            updated_by=topic.updated_by,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_duplicate_key_update(
+            aliases=stmt.inserted.aliases,
+            guidance=func.coalesce(stmt.inserted.guidance, intelligence_topics.c.guidance),
+            updated_by=func.coalesce(stmt.inserted.updated_by, intelligence_topics.c.updated_by),
+            updated_at=now,
+        )
+        await conn.execute(stmt)
+        row = (
+            await conn.execute(
+                select(intelligence_topics).where(
+                    intelligence_topics.c.org_id == topic.org_id,
+                    intelligence_topics.c.kind == (
+                        topic.kind.value if isinstance(topic.kind, TopicKind) else topic.kind
+                    ),
+                    intelligence_topics.c.canonical_name == topic.canonical_name,
+                )
+            )
+        ).mappings().first()
+        return _topic_from_row(row)
+
+    async def update_topic_guidance(
+        self, org_id: str, topic_id: int, update_payload: TopicGuidanceUpdate
+    ) -> Optional[IntelligenceTopic]:
+        values: dict = {"updated_at": datetime.utcnow()}
+        if update_payload.guidance is not None:
+            values["guidance"] = update_payload.guidance
+        if update_payload.aliases is not None:
+            values["aliases"] = update_payload.aliases
+        if update_payload.canonical_name is not None:
+            values["canonical_name"] = update_payload.canonical_name
+        if update_payload.updated_by is not None:
+            values["updated_by"] = update_payload.updated_by
+        if len(values) == 1:
+            return await self.get_topic(org_id, topic_id)
+
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(intelligence_topics)
+                .where(
+                    intelligence_topics.c.org_id == org_id,
+                    intelligence_topics.c.id == topic_id,
+                )
+                .values(**values)
+            )
+            if result.rowcount == 0:
+                return None
+            row = (
+                await conn.execute(
+                    select(intelligence_topics).where(
+                        intelligence_topics.c.org_id == org_id,
+                        intelligence_topics.c.id == topic_id,
+                    )
+                )
+            ).mappings().first()
+        return _topic_from_row(row) if row else None
+
+    async def merge_topics(
+        self, org_id: str, source_id: int, target_id: int
+    ) -> Optional[IntelligenceTopic]:
+        if source_id == target_id:
+            return await self.get_topic(org_id, target_id)
+
+        async with self.engine.begin() as conn:
+            source = (
+                await conn.execute(
+                    select(intelligence_topics).where(
+                        intelligence_topics.c.org_id == org_id,
+                        intelligence_topics.c.id == source_id,
+                    )
+                )
+            ).mappings().first()
+            target = (
+                await conn.execute(
+                    select(intelligence_topics).where(
+                        intelligence_topics.c.org_id == org_id,
+                        intelligence_topics.c.id == target_id,
+                    )
+                )
+            ).mappings().first()
+            if not source or not target:
+                return None
+            if source["kind"] != target["kind"]:
+                raise ValueError("Cannot merge topics of different kinds")
+
+            source_name = source["canonical_name"]
+            target_name = target["canonical_name"]
+            kind = source["kind"]
+
+            if kind == TopicKind.FEATURE_GAP.value:
+                await self._rewrite_feature_gap_mentions(conn, org_id, source_name, target_name)
+            else:
+                await self._rewrite_pain_point_mentions(conn, org_id, source_name, target_name)
+
+            aliases = list(target["aliases"] or [])
+            if source_name not in aliases:
+                aliases.append(source_name)
+            for alias in source["aliases"] or []:
+                if alias not in aliases and alias != target_name:
+                    aliases.append(alias)
+
+            await conn.execute(
+                update(intelligence_topics)
+                .where(intelligence_topics.c.id == target_id)
+                .values(aliases=aliases, updated_at=datetime.utcnow())
+            )
+            await conn.execute(
+                update(intelligence_topics)
+                .where(intelligence_topics.c.id == source_id)
+                .values(merged_into_id=target_id, updated_at=datetime.utcnow())
+            )
+
+        if kind == TopicKind.FEATURE_GAP.value:
+            await self.recompute_feature_gap_scores(org_id, [source_name, target_name])
+
+        return await self.get_topic(org_id, target_id)
+
+    async def _rewrite_feature_gap_mentions(self, conn, org_id: str, source_name: str, target_name: str) -> None:
+        rows = (
+            await conn.execute(
+                select(feature_gap_mentions).where(
+                    feature_gap_mentions.c.org_id == org_id,
+                    feature_gap_mentions.c.feature_name == source_name,
+                )
+            )
+        ).mappings().all()
+        now = datetime.utcnow()
+        fg_stmt = mysql_insert(feature_gaps).values(
+            org_id=org_id, feature_name=target_name, created_at=now
+        )
+        fg_stmt = fg_stmt.on_duplicate_key_update(feature_name=fg_stmt.inserted.feature_name)
+        await conn.execute(fg_stmt)
+
+        for row in rows:
+            insert_stmt = mysql_insert(feature_gap_mentions).values(
+                org_id=row["org_id"],
+                external_customer_id=row["external_customer_id"],
+                feature_name=target_name[:191],
+                description=row["description"],
+                confidence=row["confidence"],
+                excerpt=row["excerpt"],
+                source_connector=row["source_connector"],
+                source_type=row["source_type"],
+                external_event_id=row["external_event_id"],
+                citation_url=row["citation_url"],
+                occurred_at=row["occurred_at"],
+                created_at=row["created_at"],
+            )
+            insert_stmt = insert_stmt.on_duplicate_key_update(
+                confidence=func.greatest(
+                    feature_gap_mentions.c.confidence, insert_stmt.inserted.confidence
+                ),
+            )
+            await conn.execute(insert_stmt)
+            await conn.execute(
+                feature_gap_mentions.delete().where(feature_gap_mentions.c.id == row["id"])
+            )
+
+    async def _rewrite_pain_point_mentions(self, conn, org_id: str, source_name: str, target_name: str) -> None:
+        rows = (
+            await conn.execute(
+                select(pain_point_mentions).where(
+                    pain_point_mentions.c.org_id == org_id,
+                    pain_point_mentions.c.topic_name == source_name,
+                )
+            )
+        ).mappings().all()
+        for row in rows:
+            insert_stmt = mysql_insert(pain_point_mentions).values(
+                org_id=row["org_id"],
+                external_customer_id=row["external_customer_id"],
+                topic_name=target_name[:191],
+                summary=row["summary"],
+                sentiment=row["sentiment"],
+                confidence=row["confidence"],
+                excerpt=row["excerpt"],
+                source_connector=row["source_connector"],
+                source_type=row["source_type"],
+                external_event_id=row["external_event_id"],
+                citation_url=row["citation_url"],
+                occurred_at=row["occurred_at"],
+                created_at=row["created_at"],
+            )
+            insert_stmt = insert_stmt.on_duplicate_key_update(
+                confidence=func.greatest(
+                    pain_point_mentions.c.confidence, insert_stmt.inserted.confidence
+                ),
+            )
+            await conn.execute(insert_stmt)
+            await conn.execute(
+                pain_point_mentions.delete().where(pain_point_mentions.c.id == row["id"])
+            )
+
+    async def list_customer_names(self, org_id: str, limit: int = 500) -> list[tuple[str, str]]:
+        async with self.engine.begin() as conn:
+            rows = (
+                await conn.execute(
+                    select(customers.c.external_customer_id, customers.c.customer_name)
+                    .where(customers.c.org_id == org_id)
+                    .order_by(customers.c.customer_name)
+                    .limit(limit)
+                )
+            ).all()
+        return [(r[0], r[1]) for r in rows]
 
     async def recompute_feature_gap_scores(
         self, org_id: str, feature_names: Optional[list[str]] = None
@@ -186,7 +499,7 @@ class MySQLIntelligenceStore(IIntelligenceStore):
                 feature_names = [r[0] for r in rows]
 
             for feature_name in feature_names:
-                # Distinct customers + mention count for this feature gap.
+                # Distinct customers + mention count — only score-eligible confidence.
                 mention_rows = (
                     await conn.execute(
                         select(
@@ -196,6 +509,7 @@ class MySQLIntelligenceStore(IIntelligenceStore):
                         .where(
                             feature_gap_mentions.c.org_id == org_id,
                             feature_gap_mentions.c.feature_name == feature_name,
+                            feature_gap_mentions.c.confidence >= _SCORE_MIN_CONFIDENCE,
                         )
                         .group_by(feature_gap_mentions.c.external_customer_id)
                     )

@@ -17,6 +17,8 @@ from app.modules.customer_intelligence.queries.services import (
     CustomerQueryService,
     FeatureGapQueryService,
     OverviewQueryService,
+    PainPointQueryService,
+    TopicService,
 )
 from app.services.intelligence_store.intelligence_store_factory import (
     IntelligenceStoreFactory,
@@ -33,6 +35,12 @@ class IntelligenceAppContainer(BaseAppContainer):
         ConfigurationService, logger=logger, key_value_store=key_value_store
     )
 
+    # Write-capable store (topics guidance / merge). Shares the same MySQL backend.
+    intelligence_store = providers.Resource(
+        IntelligenceStoreFactory.create_store,
+        logger=logger,
+    )
+
     intelligence_query_repository = providers.Resource(
         IntelligenceStoreFactory.create_query_repository,
         logger=logger,
@@ -46,8 +54,14 @@ class IntelligenceAppContainer(BaseAppContainer):
     feature_gap_query_service = providers.Singleton(
         FeatureGapQueryService, repository=intelligence_query_repository
     )
+    pain_point_query_service = providers.Singleton(
+        PainPointQueryService, repository=intelligence_query_repository
+    )
     customer_query_service = providers.Singleton(
         CustomerQueryService, repository=intelligence_query_repository
+    )
+    topic_service = providers.Singleton(
+        TopicService, store=intelligence_store
     )
 
     wiring_config = containers.WiringConfiguration(modules=["app.intelligence_main"])
@@ -61,6 +75,7 @@ async def initialize_container(container: IntelligenceAppContainer) -> bool:
     # instead of crash-looping under the process monitor.
     try:
         await container.intelligence_query_repository()
+        await container.intelligence_store()
         logger.info("✅ Intelligence query repository connected")
     except Exception as e:
         logger.warning(f"⚠️ Intelligence store unavailable at startup, will retry per request: {e}")

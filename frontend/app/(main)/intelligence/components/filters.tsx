@@ -16,6 +16,7 @@ export function FiltersBar({
   onConnectorChange,
   connectors,
   searchPlaceholder,
+  hideMinArr = false,
 }: {
   query: string;
   onQueryChange: (v: string) => void;
@@ -25,6 +26,7 @@ export function FiltersBar({
   onConnectorChange: (v: string) => void;
   connectors: string[];
   searchPlaceholder: string;
+  hideMinArr?: boolean;
 }) {
   return (
     <Flex
@@ -49,19 +51,21 @@ export function FiltersBar({
           <MaterialIcon name="search" size={16} color="var(--slate-9)" />
         </TextField.Slot>
       </TextField.Root>
-      <TextField.Root
-        size="2"
-        type="number"
-        min={0}
-        placeholder="Min ARR (USD)"
-        value={minArr}
-        onChange={(e) => onMinArrChange(e.target.value)}
-        style={{ width: 160 }}
-      >
-        <TextField.Slot>
-          <MaterialIcon name="attach_money" size={16} color="var(--slate-9)" />
-        </TextField.Slot>
-      </TextField.Root>
+      {!hideMinArr ? (
+        <TextField.Root
+          size="2"
+          type="number"
+          min={0}
+          placeholder="Min ARR (USD)"
+          value={minArr}
+          onChange={(e) => onMinArrChange(e.target.value)}
+          style={{ width: 160 }}
+        >
+          <TextField.Slot>
+            <MaterialIcon name="attach_money" size={16} color="var(--slate-9)" />
+          </TextField.Slot>
+        </TextField.Root>
+      ) : null}
       <Select.Root
         size="2"
         value={connector || ALL_CONNECTORS}

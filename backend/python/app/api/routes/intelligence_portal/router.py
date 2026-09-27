@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routes.intelligence_portal import customers, feature_gaps, overview
+from app.api.routes.intelligence_portal import customers, feature_gaps, overview, pain_points, topics
 
 API_PREFIX = "/api/v1/intelligence-portal"
 
 router = APIRouter(prefix=API_PREFIX)
 router.include_router(overview.router)
 router.include_router(feature_gaps.router)
+router.include_router(pain_points.router)
+router.include_router(topics.router)
 router.include_router(customers.router)

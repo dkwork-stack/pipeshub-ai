@@ -15568,6 +15568,122 @@ components:
           type: array
           items:
             type: string
+        max_confidence:
+          type: number
+          nullable: true
+        avg_confidence:
+          type: number
+          nullable: true
+        low_confidence_count:
+          type: integer
+          default: 0
+    IntelligencePainPoint:
+      type: object
+      required: [topic_name, customer_count, mention_count, max_confidence]
+      properties:
+        topic_name:
+          type: string
+        customer_count:
+          type: integer
+        mention_count:
+          type: integer
+        max_confidence:
+          type: number
+        avg_confidence:
+          type: number
+          nullable: true
+        low_confidence_count:
+          type: integer
+          default: 0
+        top_customers:
+          type: array
+          items:
+            type: string
+    IntelligencePainPointMention:
+      type: object
+      required: [external_customer_id, topic_name, summary, confidence, source_connector, source_type, external_event_id, occurred_at]
+      properties:
+        external_customer_id:
+          type: string
+        topic_name:
+          type: string
+        summary:
+          type: string
+        sentiment:
+          type: string
+        confidence:
+          type: number
+        excerpt:
+          type: string
+        source_connector:
+          type: string
+        source_type:
+          type: string
+        external_event_id:
+          type: string
+        citation_url:
+          type: string
+          nullable: true
+        occurred_at:
+          type: string
+          format: date-time
+    IntelligencePainPointDetail:
+      allOf:
+        - $ref: '#/components/schemas/IntelligencePainPoint'
+        - type: object
+          properties:
+            affected_customers:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligenceAffectedCustomer'
+            mentions:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligencePainPointMention'
+    IntelligenceTopic:
+      type: object
+      required: [id, kind, canonical_name]
+      properties:
+        id:
+          type: integer
+        kind:
+          type: string
+          enum: [pain_point, feature_gap]
+        canonical_name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        guidance:
+          type: string
+          nullable: true
+        merged_into_id:
+          type: integer
+          nullable: true
+        updated_by:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+    IntelligenceTopicUpdate:
+      type: object
+      properties:
+        guidance:
+          type: string
+          nullable: true
+        aliases:
+          type: array
+          items:
+            type: string
+        canonical_name:
+          type: string
     IntelligenceAffectedCustomer:
       type: object
       required: [external_customer_id, customer_name, arr, mrr, mention_count]
@@ -15624,10 +15740,45 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/IntelligenceInsight'
+            pain_point_insights:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligencePainPointInsight'
             mentions:
               type: array
               items:
                 $ref: '#/components/schemas/IntelligenceMention'
+            pain_point_mentions:
+              type: array
+              items:
+                $ref: '#/components/schemas/IntelligencePainPointMention'
+    IntelligencePainPointInsight:
+      type: object
+      required: [topic_name, mention_count, max_confidence]
+      properties:
+        topic_name:
+          type: string
+        mention_count:
+          type: integer
+        max_confidence:
+          type: number
+        avg_confidence:
+          type: number
+          nullable: true
+        low_confidence_count:
+          type: integer
+        last_mentioned_at:
+          type: string
+          format: date-time
+          nullable: true
+        source_connectors:
+          type: array
+          items:
+            type: string
+        sentiments:
+          type: array
+          items:
+            type: string
     IntelligenceOverview:
       type: object
       required: [total_arr_at_stake, total_mrr_at_stake, feature_gap_count, customer_count, mention_count]
@@ -41818,6 +41969,13 @@ paths:
           schema:
             type: string
           description: Only gaps mentioned by this `external_customer_id`
+        - name: min_confidence
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+          description: Only gaps with at least one mention at or above this confidence
         - name: limit
           in: query
           schema:
@@ -41877,6 +42035,12 @@ paths:
           schema:
             type: string
           description: Only mentions from this connector
+        - name: min_confidence
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
       responses:
         '200':
           description: Feature gap detail
@@ -41888,6 +42052,230 @@ paths:
           description: Unauthorized
         '404':
           description: Feature gap not found in the caller's organization
+
+  /intelligence-portal/pain-points:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Search pain points
+      description: Pain-point topics aggregated from customer evidence, with optional search and confidence filters.
+      operationId: searchIntelligencePainPoints
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 256
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+        - name: min_confidence
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Page of pain points
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntelligencePainPoint'
+                  page:
+                    $ref: '#/components/schemas/IntelligencePageMeta'
+        '401':
+          description: Unauthorized
+
+  /intelligence-portal/pain-points/{topicName}:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Get one pain point with evidence
+      operationId: getIntelligencePainPoint
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: topicName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+        - name: source_connector
+          in: query
+          schema:
+            type: string
+        - name: min_confidence
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+      responses:
+        '200':
+          description: Pain point detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligencePainPointDetail'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Pain point not found
+
+  /intelligence-portal/topics:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: List taxonomy topics
+      operationId: listIntelligenceTopics
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [pain_point, feature_gap]
+      responses:
+        '200':
+          description: Topics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IntelligenceTopic'
+        '401':
+          description: Unauthorized
+
+  /intelligence-portal/topics/{topicId}:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Get one taxonomy topic
+      operationId: getIntelligenceTopic
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:read]
+      parameters:
+        - name: topicId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Topic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceTopic'
+        '404':
+          description: Topic not found
+    patch:
+      tags:
+        - Customer Feature Intelligence
+      summary: Update topic guidance or aliases
+      operationId: updateIntelligenceTopic
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:write]
+      parameters:
+        - name: topicId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntelligenceTopicUpdate'
+      responses:
+        '200':
+          description: Updated topic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceTopic'
+        '403':
+          description: Missing `intelligence:write` scope
+        '404':
+          description: Topic not found
+
+  /intelligence-portal/topics/{topicId}/merge:
+    post:
+      tags:
+        - Customer Feature Intelligence
+      summary: Merge a topic into another
+      description: Rewrites mentions from the source topic onto the target, appends the source name as an alias, and marks the source as merged.
+      operationId: mergeIntelligenceTopic
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:write]
+      parameters:
+        - name: topicId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Source topic id (the one being merged away)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_id]
+              properties:
+                target_id:
+                  type: integer
+      responses:
+        '200':
+          description: Target topic after merge
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceTopic'
+        '400':
+          description: Topics are different kinds or invalid
+        '404':
+          description: Topic not found
 
   /intelligence-portal/customers:
     get:

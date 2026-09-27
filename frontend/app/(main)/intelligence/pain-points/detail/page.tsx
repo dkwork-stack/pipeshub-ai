@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * Feature-gap detail. Uses `?name=` because `output: 'export'` disallows
- * dynamic `[name]` segments without a fixed `generateStaticParams` list.
+ * Pain-point detail. Uses `?name=` because `output: 'export'` disallows
+ * dynamic segments without a fixed `generateStaticParams` list.
  *
- * URL: `/intelligence/feature-gaps/detail?name=<feature>`
+ * URL: `/intelligence/pain-points/detail?name=<topic>`
  */
 
 import { Suspense, useState } from 'react';
@@ -12,9 +12,9 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Button, Flex, Select, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useFeatureGap, useSourceConnectors } from '../../api';
-import { MentionsTable } from '../../components/mentions-table';
+import { usePainPoint, useSourceConnectors } from '../../api';
 import {
+  ConfidenceBadge,
   EmptyState,
   ErrorState,
   LoadingRows,
@@ -24,8 +24,8 @@ import {
   TopicGuidancePanel,
   formatConfidence,
   formatCount,
+  formatDate,
   formatMoney,
-  formatScore,
   isNotFoundError,
 } from '../../components';
 
@@ -37,29 +37,24 @@ const CONF_OPTIONS = [
   { value: '0.9', label: '≥ 90%' },
 ] as const;
 
-function FeatureGapDetailContent() {
+function PainPointDetailContent() {
   const searchParams = useSearchParams();
-  const featureName = searchParams.get('name')?.trim() || null;
-
-  const [customerId, setCustomerId] = useState('');
+  const topicName = searchParams.get('name')?.trim() || null;
   const [connector, setConnector] = useState('');
   const [minConfidence, setMinConfidence] = useState('');
 
   const { data: connectors } = useSourceConnectors();
-  const { data, error, isLoading, mutate } = useFeatureGap(featureName, {
-    customer_id: customerId || undefined,
+  const { data, error, isLoading, mutate } = usePainPoint(topicName, {
     source_connector: connector || undefined,
     min_confidence: minConfidence ? Number(minConfidence) : undefined,
   });
 
-  const notFound = isNotFoundError(error);
-
-  if (!featureName) {
+  if (!topicName) {
     return (
       <EmptyState
         icon="search_off"
-        title="Missing feature name"
-        description="Open a feature gap from the list to see its detail."
+        title="Missing pain point name"
+        description="Open a pain point from the list to see its detail."
       />
     );
   }
@@ -67,19 +62,19 @@ function FeatureGapDetailContent() {
   return (
     <Flex direction="column" gap="4">
       <Button asChild size="1" variant="ghost" color="gray" style={{ alignSelf: 'flex-start' }}>
-        <Link href="/intelligence/feature-gaps">
-          <MaterialIcon name="arrow_back" size={14} /> Feature gaps
+        <Link href="/intelligence/pain-points">
+          <MaterialIcon name="arrow_back" size={14} /> Pain points
         </Link>
       </Button>
 
       <PortalHero
-        eyebrow="Feature gap"
-        title={featureName}
-        subtitle="Who is asking for this, how much revenue it represents, and the evidence behind it."
+        eyebrow="Pain point"
+        title={topicName}
+        subtitle="Who expressed this, the evidence behind it, and guidance for the extractor."
       />
 
-      {notFound ? (
-        <EmptyState icon="search_off" title="Feature gap not found" description="It may have been renamed or no longer has any evidence." />
+      {isNotFoundError(error) ? (
+        <EmptyState icon="search_off" title="Pain point not found" />
       ) : error ? (
         <ErrorState error={error} onRetry={() => void mutate()} />
       ) : null}
@@ -90,11 +85,8 @@ function FeatureGapDetailContent() {
         <>
           <StatStrip
             items={[
-              { icon: 'payments', label: 'ARR at stake', value: formatMoney(data.total_arr_at_stake, true) },
-              { icon: 'calendar_month', label: 'MRR at stake', value: formatMoney(data.total_mrr_at_stake, true) },
               { icon: 'groups', label: 'Customers', value: formatCount(data.customer_count) },
               { icon: 'format_quote', label: 'Mentions', value: formatCount(data.mention_count) },
-              { icon: 'leaderboard', label: 'Priority score', value: formatScore(data.score), hint: 'Revenue × demand' },
               {
                 icon: 'verified',
                 label: 'Max confidence',
@@ -104,7 +96,7 @@ function FeatureGapDetailContent() {
           />
 
           <SurfacePanel title="Extraction guidance">
-            <TopicGuidancePanel kind="feature_gap" canonicalName={featureName} />
+            <TopicGuidancePanel kind="pain_point" canonicalName={topicName} />
           </SurfacePanel>
 
           <SurfacePanel title="Affected customers">
@@ -116,9 +108,7 @@ function FeatureGapDetailContent() {
                   <Table.Row>
                     <Table.ColumnHeaderCell>Customer</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell align="right">ARR</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">MRR</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell />
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -126,26 +116,13 @@ function FeatureGapDetailContent() {
                     <Table.Row key={c.external_customer_id}>
                       <Table.RowHeaderCell>
                         <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                          <Text size="2" weight="medium" style={{ color: 'var(--emerald-11)' }}>
+                          <Text size="2" style={{ color: 'var(--emerald-11)' }}>
                             {c.customer_name}
                           </Text>
                         </Link>
                       </Table.RowHeaderCell>
-                      <Table.Cell align="right">{formatMoney(c.arr)}</Table.Cell>
-                      <Table.Cell align="right">{formatMoney(c.mrr)}</Table.Cell>
+                      <Table.Cell align="right">{formatMoney(c.arr, true)}</Table.Cell>
                       <Table.Cell align="right">{formatCount(c.mention_count)}</Table.Cell>
-                      <Table.Cell align="right">
-                        <Button
-                          size="1"
-                          variant={customerId === c.external_customer_id ? 'solid' : 'soft'}
-                          color="gray"
-                          onClick={() =>
-                            setCustomerId(customerId === c.external_customer_id ? '' : c.external_customer_id)
-                          }
-                        >
-                          {customerId === c.external_customer_id ? 'Clear filter' : 'Filter evidence'}
-                        </Button>
-                      </Table.Cell>
                     </Table.Row>
                   ))}
                 </Table.Body>
@@ -156,12 +133,7 @@ function FeatureGapDetailContent() {
           <SurfacePanel
             title="Evidence"
             action={
-              <Flex gap="2" align="center">
-                {customerId ? (
-                  <Button size="1" variant="soft" color="gray" onClick={() => setCustomerId('')}>
-                    Customer: {customerId} ✕
-                  </Button>
-                ) : null}
+              <Flex gap="2">
                 <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
                   <Select.Trigger style={{ minWidth: 150 }} />
                   <Select.Content>
@@ -190,7 +162,43 @@ function FeatureGapDetailContent() {
               </Flex>
             }
           >
-            <MentionsTable mentions={data.mentions} showFeature={false} />
+            {data.mentions.length === 0 ? (
+              <EmptyState icon="format_quote" title="No evidence yet" />
+            ) : (
+              <Table.Root variant="surface" size="1">
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeaderCell>Evidence</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Source</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Date</Table.ColumnHeaderCell>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {data.mentions.map((m, idx) => (
+                    <Table.Row key={`${m.external_event_id}-${idx}`}>
+                      <Table.Cell style={{ maxWidth: 420 }}>
+                        <Flex direction="column" gap="1">
+                          <Text size="2">{m.summary}</Text>
+                          {m.excerpt ? (
+                            <Text size="1" style={{ color: 'var(--slate-11)', fontStyle: 'italic' }}>
+                              “{m.excerpt}”
+                            </Text>
+                          ) : null}
+                        </Flex>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text size="1">{m.source_connector}</Text>
+                      </Table.Cell>
+                      <Table.Cell align="right">
+                        <ConfidenceBadge value={m.confidence} />
+                      </Table.Cell>
+                      <Table.Cell>{formatDate(m.occurred_at)}</Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            )}
           </SurfacePanel>
         </>
       ) : null}
@@ -198,10 +206,10 @@ function FeatureGapDetailContent() {
   );
 }
 
-export default function FeatureGapDetailPage() {
+export default function PainPointDetailPage() {
   return (
     <Suspense fallback={<LoadingRows rows={4} />}>
-      <FeatureGapDetailContent />
+      <PainPointDetailContent />
     </Suspense>
   );
 }
