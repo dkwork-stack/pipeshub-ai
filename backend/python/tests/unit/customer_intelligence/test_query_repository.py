@@ -51,7 +51,7 @@ def _mention(org: str, cust: str, feature: str, event: str, connector: str, days
         "external_event_id": event,
         "citation_url": f"https://src/{event}",
         "occurred_at": T0 + timedelta(days=days),
-        "created_at": T0,
+        "created_at": T0 + timedelta(days=days),
     }
 
 

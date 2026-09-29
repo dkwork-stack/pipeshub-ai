@@ -47,7 +47,7 @@ export const intelligenceUrls = {
     buildUrl(`/customers/${encodeURIComponent(id)}`, f),
 };
 
-const swrOptions = { revalidateOnFocus: false, keepPreviousData: true } as const;
+const swrOptions = { revalidateOnFocus: true, keepPreviousData: true } as const;
 
 export function useIntelligenceOverview(topN = 5) {
   return useSWR<IntelligenceOverview>(intelligenceUrls.overview(topN), axiosFetcher, swrOptions);

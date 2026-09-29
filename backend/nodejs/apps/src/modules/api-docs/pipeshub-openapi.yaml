@@ -15824,6 +15824,10 @@ components:
           type: string
           format: date-time
           nullable: true
+          description: >
+            Latest ingestion timestamp across feature-gap and pain-point mentions
+            (when evidence was written into the intelligence store), not the
+            source event's original occurred_at.
 
 security:
   - bearerAuth: []

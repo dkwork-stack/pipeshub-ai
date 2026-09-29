@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import Link from 'next/link';
-import { Button, Flex, Table, Text } from '@radix-ui/themes';
+import { Box, Button, Flex, Table, Text } from '@radix-ui/themes';
 import { useIntelligenceOverview } from './api';
 import {
   Avatar,
@@ -35,6 +35,14 @@ export default function IntelligenceOverviewPage() {
     () =>
       data && data.top_feature_gaps.length
         ? Math.max(...data.top_feature_gaps.map((g) => g.total_arr_at_stake))
+        : 0,
+    [data],
+  );
+
+  const maxCustomerArr = useMemo(
+    () =>
+      data && data.top_customers.length
+        ? Math.max(...data.top_customers.map((c) => c.latest_revenue?.arr ?? 0))
         : 0,
     [data],
   );
@@ -75,18 +83,21 @@ export default function IntelligenceOverviewPage() {
                 color: 'purple',
                 label: 'MRR at stake',
                 value: formatMoney(data.total_mrr_at_stake, true),
+                hint: 'Estimated monthly impact',
               },
               {
                 icon: 'extension',
                 color: 'amber',
                 label: 'Feature gaps',
                 value: formatCount(data.feature_gap_count),
+                hint: 'Unique feature requests',
               },
               {
                 icon: 'group',
                 color: 'pink',
                 label: 'Customers',
                 value: formatCount(data.customer_count),
+                hint: 'Asking for these features',
               },
               {
                 icon: 'format_quote',
@@ -102,7 +113,16 @@ export default function IntelligenceOverviewPage() {
             <ConnectorBadges connectors={data.source_connectors} />
           </SurfacePanel>
 
-          <Flex gap="4" wrap="wrap" align="stretch" style={{ width: '100%' }}>
+          <Box
+            className="intelligence-overview-panels"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.35fr)',
+              gap: 16,
+              width: '100%',
+              alignItems: 'stretch',
+            }}
+          >
             <SurfacePanel
               title="Top customers"
               subtitle="Ranked by ARR"
@@ -114,7 +134,15 @@ export default function IntelligenceOverviewPage() {
                   </Link>
                 </Button>
               }
-              style={{ flex: '1 1 360px', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}
+              style={{
+                minWidth: 0,
+                height: '100%',
+                minHeight: '100%',
+                alignSelf: 'stretch',
+                display: 'flex',
+                flexDirection: 'column',
+                boxSizing: 'border-box',
+              }}
             >
               {data.top_customers.length === 0 ? (
                 <EmptyState icon="group" title="No customers yet" />
@@ -143,8 +171,19 @@ export default function IntelligenceOverviewPage() {
                             </Flex>
                           </Link>
                         </Table.RowHeaderCell>
-                        <Table.Cell align="right">{formatMoney(c.latest_revenue?.arr, true)}</Table.Cell>
-                        <Table.Cell align="right">{formatCount(c.feature_gap_count)}</Table.Cell>
+                        <Table.Cell align="right">
+                          <Flex direction="column" align="end" gap="0">
+                            <Text size="2" style={{ color: portal.strong }}>
+                              {formatMoney(c.latest_revenue?.arr, true)}
+                            </Text>
+                            <MiniBar value={c.latest_revenue?.arr ?? 0} max={maxCustomerArr} />
+                          </Flex>
+                        </Table.Cell>
+                        <Table.Cell align="right">
+                          <Text size="2" style={{ color: portal.strong }}>
+                            {formatCount(c.feature_gap_count)}
+                          </Text>
+                        </Table.Cell>
                       </Table.Row>
                     ))}
                   </Table.Body>
@@ -163,7 +202,15 @@ export default function IntelligenceOverviewPage() {
                   </Link>
                 </Button>
               }
-              style={{ flex: '1 1 480px', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}
+              style={{
+                minWidth: 0,
+                height: '100%',
+                minHeight: '100%',
+                alignSelf: 'stretch',
+                display: 'flex',
+                flexDirection: 'column',
+                boxSizing: 'border-box',
+              }}
             >
               {data.top_feature_gaps.length === 0 ? (
                 <EmptyState
@@ -199,12 +246,22 @@ export default function IntelligenceOverviewPage() {
                           </Table.RowHeaderCell>
                           <Table.Cell align="right">
                             <Flex direction="column" align="end" gap="0">
-                              <Text size="2">{formatMoney(gap.total_arr_at_stake, true)}</Text>
+                              <Text size="2" style={{ color: portal.strong }}>
+                                {formatMoney(gap.total_arr_at_stake, true)}
+                              </Text>
                               <MiniBar value={gap.total_arr_at_stake} max={maxArr} />
                             </Flex>
                           </Table.Cell>
-                          <Table.Cell align="right">{formatCount(gap.customer_count)}</Table.Cell>
-                          <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
+                          <Table.Cell align="right">
+                            <Text size="2" style={{ color: portal.strong }}>
+                              {formatCount(gap.customer_count)}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell align="right">
+                            <Text size="2" style={{ color: portal.strong }}>
+                              {formatCount(gap.mention_count)}
+                            </Text>
+                          </Table.Cell>
                           <Table.Cell align="right">
                             <ScoreBadge
                               label={formatScore(normalized)}
@@ -219,7 +276,7 @@ export default function IntelligenceOverviewPage() {
                 </Table.Root>
               )}
             </SurfacePanel>
-          </Flex>
+          </Box>
         </>
       ) : null}
     </Flex>

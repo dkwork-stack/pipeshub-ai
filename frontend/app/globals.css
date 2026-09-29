@@ -456,7 +456,7 @@ summary {
   max-width: 1180px;
   box-sizing: border-box;
 }
-/* Radix olive gray washes out table headers on white — force Cooper ink. */
+/* Radix olive gray washes out table text on white — force Cooper ink. */
 .intelligence-shell .rt-TableColumnHeaderCell {
   color: #0f172a !important;
   font-weight: 600 !important;
@@ -465,10 +465,29 @@ summary {
 .intelligence-shell .rt-TableColumnHeaderCell .rt-Text {
   color: inherit !important;
 }
+.intelligence-shell .rt-TableCell,
+.intelligence-shell .rt-TableRowHeaderCell {
+  color: #172033 !important;
+}
+.intelligence-shell .rt-TableCell .rt-Text,
+.intelligence-shell .rt-TableRowHeaderCell .rt-Text {
+  color: inherit;
+}
+.intelligence-overview-panels {
+  display: grid;
+  align-items: stretch;
+}
+.intelligence-overview-panels > * {
+  height: 100%;
+  min-height: 100%;
+}
 @media (max-width: 900px) {
   .intelligence-content-inner {
     padding-left: 16px !important;
     padding-right: 16px !important;
+  }
+  .intelligence-overview-panels {
+    grid-template-columns: 1fr !important;
   }
 }
 

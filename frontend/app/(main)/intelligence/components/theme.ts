@@ -60,7 +60,7 @@ export const portal = {
   /** Single source of truth for product branding — update here, not per-component. */
   brand: {
     name: 'Cooper',
-    tagline: 'Feature Intelligence',
+    tagline: '',
     icon: 'auto_awesome',
     gradient: 'linear-gradient(145deg, #2563eb, #1d4ed8)',
   } as const,

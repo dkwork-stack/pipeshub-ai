@@ -15,8 +15,8 @@ export function PortalHero({
   actions?: React.ReactNode;
 }) {
   return (
-    <Flex justify="between" align="end" gap="4" wrap="wrap" mb="5">
-      <Flex direction="column" gap="2" style={{ maxWidth: 720 }}>
+    <Flex justify="between" align="end" gap="4" wrap="wrap" mb="5" style={{ width: '100%' }}>
+      <Flex direction="column" gap="2" style={{ minWidth: 0, flex: '1 1 auto' }}>
         {eyebrow ? (
           <Text
             size="1"
@@ -42,7 +42,14 @@ export function PortalHero({
           {title}
         </Heading>
         {subtitle ? (
-          <Text size="3" style={{ color: portal.muted, maxWidth: 560, lineHeight: 1.45 }}>
+          <Text
+            size="3"
+            style={{
+              color: portal.muted,
+              lineHeight: 1.45,
+              whiteSpace: 'nowrap',
+            }}
+          >
             {subtitle}
           </Text>
         ) : null}

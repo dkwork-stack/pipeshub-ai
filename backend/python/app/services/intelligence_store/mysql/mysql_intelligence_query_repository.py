@@ -434,12 +434,19 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             func.count().label("mention_count"),
             func.count(feature_gap_mentions.c.external_customer_id.distinct()).label("customer_count"),
             func.count(feature_gap_mentions.c.feature_name.distinct()).label("feature_gap_count"),
-            func.max(feature_gap_mentions.c.occurred_at).label("last_mention_at"),
+            # Ingestion time, not source-event occurred_at — otherwise an upload of
+            # historical tickets makes "Last evidence" look stale.
+            func.max(feature_gap_mentions.c.created_at).label("last_mention_at"),
         ).where(feature_gap_mentions.c.org_id == org_id)
+
+        pain_last_stmt = select(
+            func.max(pain_point_mentions.c.created_at).label("last_pain_at"),
+        ).where(pain_point_mentions.c.org_id == org_id)
 
         async with self._engine.connect() as conn:
             totals = (await conn.execute(totals_stmt)).mappings().first()
             counts = (await conn.execute(counts_stmt)).mappings().first()
+            pain_last = (await conn.execute(pain_last_stmt)).mappings().first()
             connectors = [
                 r[0]
                 for r in (
@@ -464,6 +471,13 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             org_id, CustomerFilter(), limit=top_n, offset=0, top_insights=3
         )
 
+        fg_last = counts["last_mention_at"] if counts else None
+        pp_last = pain_last["last_pain_at"] if pain_last else None
+        if fg_last and pp_last:
+            last_mention_at = max(fg_last, pp_last)
+        else:
+            last_mention_at = fg_last or pp_last
+
         return IntelligenceOverview(
             total_arr_at_stake=float(totals["arr"] or 0.0) if totals else 0.0,
             total_mrr_at_stake=float(totals["mrr"] or 0.0) if totals else 0.0,
@@ -473,7 +487,7 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             source_connectors=connectors,
             top_feature_gaps=[_score_from_row(r) for r in top_gap_rows],
             top_customers=top_customers,
-            last_mention_at=counts["last_mention_at"] if counts else None,
+            last_mention_at=last_mention_at,
         )
 
     # -------------------------------------------------------------- feature gaps

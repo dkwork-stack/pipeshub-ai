@@ -37,29 +37,36 @@ function NavRail({ compact }: { compact: boolean }) {
       }}
     >
       <Flex align="center" gap="3" px={compact ? '2' : '4'} style={{ height: 64, flexShrink: 0, justifyContent: compact ? 'center' : undefined }}>
-        <Box
+        <Link
+          href="/intelligence"
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            flexShrink: 0,
-            display: 'grid',
-            placeItems: 'center',
-            background: portal.brand.gradient,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            textDecoration: 'none',
+            color: 'inherit',
+            minWidth: 0,
           }}
         >
-          <MaterialIcon name={portal.brand.icon} size={19} color="white" />
-        </Box>
-        {!compact ? (
-          <Flex direction="column" gap="0" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
+          <Box
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              flexShrink: 0,
+              display: 'grid',
+              placeItems: 'center',
+              background: portal.brand.gradient,
+            }}
+          >
+            <MaterialIcon name={portal.brand.icon} size={19} color="white" />
+          </Box>
+          {!compact ? (
             <Text size="3" weight="bold" style={{ color: portal.strong, fontFamily: portal.displayFont, letterSpacing: '-0.02em' }}>
               {portal.brand.name}
             </Text>
-            <Text size="1" style={{ color: portal.muted }}>
-              {portal.brand.tagline}
-            </Text>
-          </Flex>
-        ) : null}
+          ) : null}
+        </Link>
       </Flex>
 
       <Flex direction="column" gap="1" px={compact ? '2' : '3'} py="2" style={{ flex: 1 }}>
