@@ -86,6 +86,9 @@ tags:
       **Who can see which apps**
       - **Everyone (including org admins)** sees and manages only OAuth apps **they created** (`createdBy`). Other members' apps are hidden (not listed; individual operations return not found).
 
+      **Session only**
+      - Every `/oauth-clients/*` route requires the user's interactive session JWT. OAuth access tokens and personal access tokens (`phpat_...`) are rejected with `403`, so a token issued to a client can never register, reconfigure, or revoke clients on its own.
+
       **Who authorizes vs. client credentials**
       - **Authorization code:** Any authenticated user in the workspace may complete consent for a valid `client_id`; issued tokens represent **that user**.
       - **Client credentials:** Access tokens represent the **OAuth app creator** (who registered the client), not the caller.
@@ -112,6 +115,13 @@ tags:
       **Who can create one**
       - **Any authenticated org member** — unlike OAuth apps, this is
         deliberately not admin-gated.
+
+      **Session only**
+      - Every `/personal-access-tokens/*` route requires the user's interactive
+        session JWT. OAuth access tokens and personal access tokens (`phpat_...`)
+        are rejected with `403`. `scopes` is capped at the instance's `MCP_SCOPES`,
+        not at the caller's own token, so a narrowly scoped token could otherwise
+        mint itself a full-scope, non-expiring PAT.
 
       **How it's issued**
       - Minted through the same OAuth access-token machinery as `/oauth2/token`,
@@ -1288,11 +1298,15 @@ components:
           description: User's consent decision
         code_challenge:
           type: string
-          description: PKCE code challenge (if used in authorization request)
+          description: |
+            PKCE code challenge (base64url, 43-128 chars). Required for public
+            (non-confidential) clients; without it the consent is answered
+            with a redirect carrying `error=invalid_request` and no code is
+            issued. Optional for confidential clients.
         code_challenge_method:
           type: string
-          enum: [S256, plain]
-          description: PKCE challenge method
+          enum: [S256]
+          description: PKCE challenge method. Only `S256` is accepted; `plain` is rejected with `400`. Defaults to `S256` when omitted.
       required:
         - client_id
         - redirect_uri
@@ -1614,8 +1628,8 @@ components:
           type: array
           items:
             type: string
-          description: Supported PKCE code challenge methods
-          example: ["S256", "plain"]
+          description: Supported PKCE code challenge methods (only `S256`)
+          example: ["S256"]
 
     OAuthProtectedResourceMetadata:
       type: object
@@ -16251,9 +16265,9 @@ paths:
         5. User is redirected back to client with authorization code
 
         **PKCE Support (RFC 7636):**
-        - Required for public clients (SPA, mobile apps)
+        - Required for public clients (SPA, mobile apps), enforced on both this GET and the consent POST
         - Recommended for confidential clients
-        - Use S256 method (SHA256 hash of code_verifier)
+        - Only the S256 method (SHA256 hash of code_verifier) is accepted; `plain` is rejected
 
         **Security:**
         - Always use HTTPS in production
@@ -16306,8 +16320,8 @@ paths:
           required: false
           schema:
             type: string
-            enum: [S256, plain]
-          description: PKCE method (S256 recommended)
+            enum: [S256]
+          description: PKCE method. Only S256 is accepted; defaults to S256 when omitted.
         - name: nonce
           in: query
           required: false
@@ -16343,6 +16357,11 @@ paths:
         Called after user reviews the consent page and makes a decision.
         This endpoint generates an authorization code if consent is granted.
 
+        **Session only.** The bearer token must be the user's interactive
+        session JWT. OAuth access tokens and personal access tokens
+        (`phpat_...`) are rejected with `403`, so a client can never consent
+        on the user's behalf with a token it already holds.
+
         **Responses:**
         - Consent granted: Redirects to client with authorization code
         - Consent denied: Redirects to client with `access_denied` error
@@ -16377,7 +16396,10 @@ paths:
         '401':
           description: User not authenticated
         '403':
-          description: Client not authorized or invalid redirect URI
+          description: |
+            Bearer token is an OAuth access token or personal access token
+            rather than a user session, or the client is not authorized /
+            the redirect URI is invalid.
 
   /oauth2/token:
     post:
@@ -16392,7 +16414,7 @@ paths:
         **Grant Types:**
         - `authorization_code`: Exchange auth code for tokens (user-based)
         - `client_credentials`: Get tokens for machine-to-machine auth
-        - `refresh_token`: Get new access token using refresh token
+        - `refresh_token`: Get new access token using refresh token. The refresh token must have been issued to the presenting `client_id`; one issued to another client is rejected with `400 invalid_grant` and is left untouched (not rotated, not revoked).
 
         For **`client_credentials`**, access tokens represent the **OAuth app creator** (the user who registered the client). The JWT may encode **`userId === client_id`**; the **Node API gateway** resolves the creator (**`createdBy`** claim or OAuth app lookup) — see **OAuth Provider** tag.
 
@@ -16648,7 +16670,7 @@ paths:
                 response_types_supported: ["code"]
                 grant_types_supported: ["authorization_code", "client_credentials", "refresh_token"]
                 token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"]
-                code_challenge_methods_supported: ["S256", "plain"]
+                code_challenge_methods_supported: ["S256"]
 
   /.well-known/oauth-authorization-server:
     get:
@@ -16687,7 +16709,7 @@ paths:
                 response_types_supported: ["code"]
                 grant_types_supported: ["authorization_code", "client_credentials", "refresh_token"]
                 token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"]
-                code_challenge_methods_supported: ["S256", "plain"]
+                code_challenge_methods_supported: ["S256"]
 
   /.well-known/jwks.json:
     get:
@@ -16824,7 +16846,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — insufficient workspace permission to list OAuth apps
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account
           content:
             application/json:
               schema:
@@ -16879,7 +16901,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — insufficient workspace permission to create OAuth apps
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account
           content:
             application/json:
               schema:
@@ -16937,6 +16959,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
+        '403':
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '429':
           description: Rate limit exceeded for OAuth client management routes
           content:
@@ -16984,7 +17012,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17053,7 +17081,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17109,7 +17137,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17164,7 +17192,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17225,7 +17253,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17286,7 +17314,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17341,7 +17369,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17403,7 +17431,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Forbidden — caller cannot access this OAuth app (creator-only; see OAuth Apps tag).
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
@@ -17477,6 +17505,11 @@ paths:
         env var, not the full role-aware OAuth-app scope catalog — a
         non-admin can request any scope in that set.
 
+        **Session only.** The bearer token must be the user's interactive
+        session JWT. OAuth access tokens and personal access tokens
+        (`phpat_...`) are rejected with `403`, so a token that is already
+        issued cannot mint another with wider scopes or a longer life.
+
         The response's `accessToken` is shown **once**; only its SHA-256
         hash is stored. It's prefixed `phpat_` (see the `bearerAuth`
         security scheme).
@@ -17506,6 +17539,12 @@ paths:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '401':
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationJsonErrorResponse'
+        '403':
+          description: Bearer token is an OAuth access token or personal access token rather than a user session
           content:
             application/json:
               schema:
@@ -18903,6 +18942,26 @@ paths:
           description: Comma-separated group IDs to filter users by group membership.
           schema:
             type: string
+        - name: includeServiceAccounts
+          in: query
+          required: false
+          description: |
+            `true` also returns service accounts, which are otherwise left out
+            of this list. They are machine identities, and this is the list of
+            people: one can never sign in, so it would sit in the pending-invite
+            set for good and be swept into bulk invites meant for colleagues.
+
+            Honoured only for an organisation administrator. The route is
+            authenticated but not admin-only, and scope checks do nothing for a
+            session token, so for anyone else the flag is ignored rather than
+            refused — listing service accounts is an administrator's action on
+            `GET /service-accounts`, and this must not be a way around that.
+
+            Returned records carry `kind`, which is what lets a caller tell a
+            machine identity from a colleague.
+          schema:
+            type: string
+            enum: ['true', 'false']
       responses:
         '200':
           description: Users retrieved successfully
@@ -18945,6 +19004,15 @@ paths:
                         email:
                           type: string
                           format: email
+                        kind:
+                          type: string
+                          enum: [human, service]
+                          description: |
+                            What sort of principal this is. Absent on records
+                            written before the field existed, which are people.
+                            Service accounts appear only when
+                            `includeServiceAccounts=true` and the caller
+                            administers the organisation.
                         isActive:
                           type: boolean
                           description: "`true` only when not blocked AND `hasLoggedIn: true`"
@@ -20845,7 +20913,7 @@ paths:
         '401':
           description: Not authenticated
         '403':
-          description: Token lacks the required scope
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account
         '404':
           description: No such application, or no such service account in this organisation
 
@@ -21120,22 +21188,30 @@ paths:
         `semantic:write` remains, despite its name. It is what running a search
         requires, so removing scopes by the word in their name would take
         reading away and leave writing alone.
+
+        Each scope is returned with the description and category held in the
+        shared scope catalogue, the same shape
+        `GET /personal-access-tokens/scopes` returns. The picker can then say
+        what a permission allows instead of showing a bare identifier, and the
+        wording for a scope stays the same on every screen that offers it.
       operationId: listServiceTokenScopes
       security:
         - bearerAuth: []
         - oauth2: [user:read]
       responses:
         '200':
-          description: Available scopes
+          description: Available scopes, each with its description and category
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - scopes
                 properties:
                   scopes:
                     type: array
                     items:
-                      type: string
+                      $ref: '#/components/schemas/OAuthScopeInfo'
         '400':
           description: Admin access required
         '401':
@@ -22493,7 +22569,7 @@ paths:
             - Missing or empty `name` or `type`
             - `type` is not one of: standard, everyone, custom
             - Group name or type `admin` is not allowed
-            - A group with the same name already exists
+            - A group with the same name already exists in the same organization
             - Requester does not have admin privileges
           content:
             application/json:
@@ -22756,6 +22832,8 @@ paths:
 
             - Missing or empty `name`
             - Invalid `groupId` format (must be a 24-character hex ObjectId)
+            - New name `admin`, `everyone` or `standard` is not allowed
+            - Another group with the same name already exists in the same organization
             - Requester does not have admin privileges
           content:
             application/json:
