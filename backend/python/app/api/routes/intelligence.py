@@ -98,6 +98,8 @@ async def ingest_revenue_snapshot(request: Request, body: CustomerRevenueSnapsho
     ingestion_service = await _get_ingestion_service(request)
     try:
         await ingestion_service.ingest_revenue_snapshot(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Failed to ingest revenue snapshot for org '%s'", org_id)
         return JSONResponse(

@@ -529,6 +529,7 @@ class ExcelParser:
                         format=DataFormat.JSON,
                         data={
                             "row_natural_language_text": generate_simple_row_text(row_data),
+                            "cells": row_data,
                             "row_number": int(row_num),
                             "row_end_number": int(row_num),
                             "row_count": 1,
@@ -1595,6 +1596,7 @@ Respond with ONLY a JSON object with EXACTLY {column_count} headers:
                             format=DataFormat.JSON,
                             data={
                                 "row_natural_language_text": row.get("natural_language_text", ""),
+                                "cells": row.get("raw_data") or {},
                                 "row_number": int(row.get("row_num") or (i + 1)),
                                 "row_end_number": int(row.get("row_end_num") or row.get("row_num") or (i + 1)),
                                 "row_count": int(row.get("row_count") or 1),

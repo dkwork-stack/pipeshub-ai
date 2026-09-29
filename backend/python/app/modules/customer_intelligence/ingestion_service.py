@@ -9,6 +9,10 @@ Nothing here is aware of Freshdesk, Salesforce, or Chargebee specifically.
 Knowledge Base uploads are the one in-process source: ``SinkOrchestrator``
 calls :meth:`ingest_indexed_record` once a record is searchable, so a CSV/PDF
 dropped into the UI lands in MySQL without a separate script.
+
+ARR/MRR is revenue-only: written from allowlisted sources (file upload,
+billing) via :meth:`ingest_revenue_snapshot`. Signal connectors only identify
+customers.
 """
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ import asyncio
 import os
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from app.config.constants.arangodb import Connectors
 from app.models.blocks import BlockType
@@ -33,6 +37,11 @@ from app.models.intelligence import (
 )
 from app.modules.customer_intelligence.pipeline import run_pipeline
 from app.modules.customer_intelligence.pipeline.context import ExtractionContext
+from app.modules.customer_intelligence.pipeline.stages import match_known_customer
+from app.modules.customer_intelligence.revenue import (
+    is_revenue_source,
+    parse_revenue_fields,
+)
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -106,11 +115,38 @@ class CustomerIntelligenceIngestionService:
             )
         return await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
 
-    async def ingest_revenue_snapshot(self, snapshot: CustomerRevenueSnapshot) -> None:
+    async def ingest_revenue_snapshot(
+        self,
+        snapshot: CustomerRevenueSnapshot,
+        *,
+        recompute_scores: bool = True,
+    ) -> None:
+        """Persist ARR/MRR from an allowlisted revenue source only.
+
+        Remaps ``external_customer_id`` onto an existing customer when the
+        name fuzzy-matches one already known from any connector.
+        """
+        if not is_revenue_source(snapshot.source_connector):
+            raise ValueError(
+                f"source_connector '{snapshot.source_connector}' is not a revenue source; "
+                "ARR/MRR may only come from file upload or billing connectors"
+            )
+
+        known = await self.intelligence_store.list_customer_names(snapshot.org_id)
+        matched = match_known_customer(snapshot.customer_name, known)
+        if matched:
+            ext_id, name = matched
+            snapshot = snapshot.model_copy(
+                update={"external_customer_id": ext_id, "customer_name": name}
+            )
+        elif not (snapshot.customer_name or "").strip():
+            snapshot = snapshot.model_copy(
+                update={"customer_name": snapshot.external_customer_id}
+            )
+
         await self.intelligence_store.upsert_revenue_snapshot(snapshot)
-        # Revenue changed => every feature gap this customer is tied to needs
-        # its score recomputed (ARR-at-stake moved).
-        await self.intelligence_store.recompute_feature_gap_scores(snapshot.org_id)
+        if recompute_scores:
+            await self.intelligence_store.recompute_feature_gap_scores(snapshot.org_id)
         self.logger.info(
             "✅ Recorded revenue snapshot for customer '%s' (ARR=%.2f)",
             snapshot.customer_name, snapshot.arr,
@@ -134,7 +170,10 @@ class CustomerIntelligenceIngestionService:
         Tabular uploads (CSV/XLSX) become one event per row; anything else is
         one event for the whole document. The customer is inferred by the
         extractor; when the text names none, the file name stands in so the
-        evidence is still attributed and queryable. Returns mentions written.
+        evidence is still attributed and queryable. ARR/MRR columns on a row
+        are written as revenue snapshots (file_upload source only).
+
+        Returns mentions written.
         """
         if not self.is_upload_record(record):
             return 0
@@ -147,18 +186,19 @@ class CustomerIntelligenceIngestionService:
             int(os.getenv("INTELLIGENCE_UPLOAD_CONCURRENCY", _DEFAULT_UPLOAD_CONCURRENCY))
         )
 
-        async def _one(event_id: str, text: str) -> int:
+        async def _one(event_id: str, text: str, cells: Mapping[str, Any] | None) -> tuple[int, bool]:
             async with semaphore:
-                return await self._ingest_upload_unit(record, event_id, text)
+                return await self._ingest_upload_unit(record, event_id, text, cells)
 
         # return_exceptions: one row's MySQL/LLM failure must not abort the
         # rest of the CSV (and must not surface as a single sink-level throw
         # that looks like the whole upload produced nothing).
         results = await asyncio.gather(
-            *(_one(eid, text) for eid, text in units),
+            *(_one(eid, text, cells) for eid, text, cells in units),
             return_exceptions=True,
         )
         total = 0
+        revenue_writes = 0
         failures = 0
         for result in results:
             if isinstance(result, BaseException):
@@ -170,11 +210,15 @@ class CustomerIntelligenceIngestionService:
                     exc_info=result,
                 )
             else:
-                total += result
+                mentions, wrote_revenue = result
+                total += mentions
+                if wrote_revenue:
+                    revenue_writes += 1
 
         # Scores are recomputed per mention; a mid-batch failure can leave the
         # org's score rows incomplete. One org-wide pass heals that cheaply.
-        if total > 0:
+        # Revenue snapshots skip per-row recompute during the batch for the same reason.
+        if total > 0 or revenue_writes > 0:
             try:
                 await self.intelligence_store.recompute_feature_gap_scores(record.org_id)
             except Exception:
@@ -185,22 +229,25 @@ class CustomerIntelligenceIngestionService:
                 )
 
         self.logger.info(
-            "✅ Upload '%s': %d unit(s) analysed, %d mention(s) written (%d unit failure(s))",
-            record.record_name, len(units), total, failures,
+            "✅ Upload '%s': %d unit(s) analysed, %d mention(s) written, "
+            "%d revenue snapshot(s) (%d unit failure(s))",
+            record.record_name, len(units), total, revenue_writes, failures,
         )
-        if failures and total == 0:
+        if failures and total == 0 and revenue_writes == 0:
             raise RuntimeError(
                 f"Customer intelligence ingestion failed for all {failures} unit(s) of '{record.record_name}'"
             )
         return total
 
-    def _text_units(self, record: "Record") -> list[tuple[str, str]]:
-        """Split a record into (external_event_id, text) units."""
+    def _text_units(
+        self, record: "Record"
+    ) -> list[tuple[str, str, Optional[Mapping[str, Any]]]]:
+        """Split a record into (external_event_id, text, cells) units."""
         containers = record.block_containers
         if not containers or not containers.blocks:
             return []
 
-        rows: list[tuple[str, str]] = []
+        rows: list[tuple[str, str, Optional[Mapping[str, Any]]]] = []
         prose: list[str] = []
         for block in containers.blocks:
             data = block.data
@@ -210,7 +257,10 @@ class CustomerIntelligenceIngestionService:
                 text = data.get("row_natural_language_text") if isinstance(data, dict) else str(data)
                 if text and text.strip():
                     row_no = data.get("row_number", block.index) if isinstance(data, dict) else block.index
-                    rows.append((f"{record.id}:row:{row_no}", text))
+                    cells = data.get("cells") if isinstance(data, dict) else None
+                    if not isinstance(cells, Mapping):
+                        cells = None
+                    rows.append((f"{record.id}:row:{row_no}", text, cells))
             elif block.type == BlockType.TEXT:
                 prose.append(data if isinstance(data, str) else str(data))
 
@@ -225,9 +275,17 @@ class CustomerIntelligenceIngestionService:
             return rows
 
         text = "\n".join(p for p in prose if p.strip())
-        return [(record.id, text)] if text.strip() else []
+        return [(record.id, text, None)] if text.strip() else []
 
-    async def _ingest_upload_unit(self, record: "Record", event_id: str, text: str) -> int:
+    async def _ingest_upload_unit(
+        self,
+        record: "Record",
+        event_id: str,
+        text: str,
+        cells: Mapping[str, Any] | None,
+    ) -> tuple[int, bool]:
+        revenue = parse_revenue_fields(cells if cells is not None else text)
+
         taxonomy, hints, known_customers = await self._load_prompt_context(record.org_id)
         result = await self.extraction_client.extract_feature_intelligence(
             text=text,
@@ -237,8 +295,9 @@ class CustomerIntelligenceIngestionService:
             known_customers=[name for _, name in known_customers],
         )
         if result is None:
-            return 0
+            result = FeatureIntelligenceExtractionResult()
 
+        seed_name = (revenue.customer_name if revenue else None) or result.customer_name
         ctx = await self._run_stages(
             org_id=record.org_id,
             text=text,
@@ -246,18 +305,48 @@ class CustomerIntelligenceIngestionService:
             taxonomy=taxonomy,
             hints=hints,
             known_customers=known_customers,
+            resolved_customer_name=seed_name,
         )
-        if not ctx.result.feature_gaps and not ctx.result.pain_points:
-            return 0
+
+        has_mentions = bool(ctx.result.feature_gaps or ctx.result.pain_points)
+        if not has_mentions and revenue is None:
+            return 0, False
 
         customer_name = (
-            (ctx.resolved_customer_name or ctx.result.customer_name or "").strip()
+            (ctx.resolved_customer_name or seed_name or "").strip()
             or record.record_name
         )
         external_customer_id = (
             ctx.resolved_customer_id
             or f"{UPLOAD_SOURCE_CONNECTOR}:{_slugify(customer_name)}"
         )
+
+        await self.intelligence_store.upsert_customer(
+            record.org_id, external_customer_id, customer_name
+        )
+
+        wrote_revenue = False
+        if revenue is not None:
+            await self.ingest_revenue_snapshot(
+                CustomerRevenueSnapshot(
+                    org_id=record.org_id,
+                    source_connector=UPLOAD_SOURCE_CONNECTOR,
+                    external_customer_id=external_customer_id,
+                    customer_name=customer_name,
+                    mrr=revenue.mrr,
+                    arr=revenue.arr,
+                    snapshot_at=datetime.fromtimestamp(
+                        (record.source_created_at or record.created_at) / 1000,
+                        tz=timezone.utc,
+                    ),
+                ),
+                recompute_scores=False,
+            )
+            wrote_revenue = True
+
+        if not has_mentions:
+            return 0, wrote_revenue
+
         event = CustomerSignalEvent(
             org_id=record.org_id,
             source_connector=UPLOAD_SOURCE_CONNECTOR,
@@ -272,10 +361,8 @@ class CustomerIntelligenceIngestionService:
             citation_url=record.weburl,
             metadata={"record_id": record.id, "record_name": record.record_name},
         )
-        await self.intelligence_store.upsert_customer(
-            event.org_id, event.external_customer_id, event.customer_name
-        )
-        return await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
+        mentions = await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
+        return mentions, wrote_revenue
 
     # ------------------------------------------------------------------
 

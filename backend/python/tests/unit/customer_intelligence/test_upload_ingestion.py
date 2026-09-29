@@ -32,6 +32,7 @@ class _FakeStore:
         self.customers: list[tuple[str, str, str]] = []
         self.mentions = []
         self.pain_mentions = []
+        self.revenue_snapshots = []
         self.topics: list[IntelligenceTopic] = []
         self.recompute_calls: list[tuple[str, list[str] | None]] = []
         self._topic_id = 1
@@ -45,11 +46,21 @@ class _FakeStore:
     async def upsert_pain_point_mention(self, mention) -> None:
         self.pain_mentions.append(mention)
 
+    async def upsert_revenue_snapshot(self, snapshot) -> None:
+        await self.upsert_customer(
+            snapshot.org_id, snapshot.external_customer_id, snapshot.customer_name
+        )
+        self.revenue_snapshots.append(snapshot)
+
     async def list_topics(self, org_id, kind=None, *, include_merged: bool = False):
         return list(self.topics)
 
     async def list_customer_names(self, org_id, limit: int = 500):
-        return [(cid, name) for _, cid, name in self.customers]
+        # Latest spelling wins for a given id.
+        by_id: dict[str, str] = {}
+        for _, cid, name in self.customers:
+            by_id[cid] = name
+        return list(by_id.items())
 
     async def upsert_topic(self, topic: IntelligenceTopic) -> IntelligenceTopic:
         topic = topic.model_copy(update={"id": self._topic_id})
@@ -109,12 +120,15 @@ def _record(
     )
 
 
-def _row(index: int, text: str, row_number: int) -> Block:
+def _row(index: int, text: str, row_number: int, cells: dict | None = None) -> Block:
+    data: dict = {"row_natural_language_text": text, "row_number": row_number}
+    if cells is not None:
+        data["cells"] = cells
     return Block(
         index=index,
         type=BlockType.TABLE_ROW,
         format=DataFormat.JSON,
-        data={"row_natural_language_text": text, "row_number": row_number},
+        data=data,
     )
 
 
@@ -250,3 +264,69 @@ async def test_one_unit_failure_does_not_drop_sibling_writes() -> None:
     assert len(store.mentions) == 1
     assert store.mentions[0].feature_name == "SSO"
     assert store.recompute_calls == [(ORG_ID, None)]
+
+
+@pytest.mark.asyncio
+async def test_upload_row_with_arr_writes_revenue_and_shares_customer_id() -> None:
+    row_text = "Customer: Acme, ARR: 120000, Notes: Need SSO for compliance"
+    cells = {"Customer": "Acme", "ARR": 120_000, "Notes": "Need SSO for compliance"}
+    client = _FakeExtractionClient(
+        {
+            row_text: FeatureIntelligenceExtractionResult(
+                feature_gaps=[_gap("SSO", "Need SSO for compliance")],
+                customer_name="Acme",
+            )
+        }
+    )
+    svc, store = _service(client)
+
+    written = await svc.ingest_indexed_record(
+        _record([_row(0, row_text, 2, cells=cells)])
+    )
+
+    assert written == 1
+    assert len(store.revenue_snapshots) == 1
+    snap = store.revenue_snapshots[0]
+    assert snap.source_connector == UPLOAD_SOURCE_CONNECTOR
+    assert snap.arr == 120_000.0
+    assert snap.mrr == 10_000.0
+    assert snap.external_customer_id == store.mentions[0].external_customer_id
+    assert store.recompute_calls == [(ORG_ID, None)]
+
+
+@pytest.mark.asyncio
+async def test_revenue_only_row_writes_snapshot_without_mentions() -> None:
+    row_text = "Customer: Globex, ARR: 50000, Notes: Quarterly check-in"
+    cells = {"Customer": "Globex", "ARR": 50_000, "Notes": "Quarterly check-in"}
+    client = _FakeExtractionClient({})  # no gaps inferred
+    svc, store = _service(client)
+
+    written = await svc.ingest_indexed_record(
+        _record([_row(0, row_text, 2, cells=cells)])
+    )
+
+    assert written == 0
+    assert store.mentions == []
+    assert len(store.revenue_snapshots) == 1
+    assert store.revenue_snapshots[0].arr == 50_000.0
+    assert store.revenue_snapshots[0].customer_name == "Globex"
+    assert store.recompute_calls == [(ORG_ID, None)]
+
+
+@pytest.mark.asyncio
+async def test_nl_text_fallback_parses_arr_when_cells_missing() -> None:
+    row_text = "Customer Name: Initech, ARR: 24000, Ticket: Need audit log"
+    client = _FakeExtractionClient(
+        {
+            row_text: FeatureIntelligenceExtractionResult(
+                feature_gaps=[_gap("Audit log", "Need audit log")],
+                customer_name="Initech",
+            )
+        }
+    )
+    svc, store = _service(client)
+
+    await svc.ingest_indexed_record(_record([_row(0, row_text, 2)]))
+
+    assert len(store.revenue_snapshots) == 1
+    assert store.revenue_snapshots[0].arr == 24_000.0

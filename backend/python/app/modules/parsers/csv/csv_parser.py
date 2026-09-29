@@ -231,6 +231,7 @@ class CSVParser:
                         format=DataFormat.JSON,
                         data={
                             "row_natural_language_text": generate_simple_row_text(row_dict),
+                            "cells": row_dict,
                             "row_number": line_number,
                             "row_end_number": line_number,
                             "row_count": 1,

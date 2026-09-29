@@ -327,6 +327,35 @@ class CanonicalizeToTopic:
         return False
 
 
+def match_known_customer(
+    customer_name: str,
+    known_customers: list[tuple[str, str]],
+    *,
+    similarity: float = _CUSTOMER_SIMILARITY,
+) -> Optional[tuple[str, str]]:
+    """Return ``(external_customer_id, canonical_name)`` when ``customer_name`` matches.
+
+    Exact (corp-suffix-stripped) first, then fuzzy. None when no match.
+    """
+    raw = (customer_name or "").strip()
+    if not raw or not known_customers:
+        return None
+    raw_n = normalize_customer_name(raw)
+    for ext_id, known_name in known_customers:
+        if normalize_customer_name(known_name) == raw_n:
+            return ext_id, known_name
+    norm_candidates = [
+        (ext_id, normalize_customer_name(name)) for ext_id, name in known_customers
+    ]
+    matched_id = _best_match(raw_n, norm_candidates, similarity)
+    if not matched_id:
+        return None
+    for ext_id, known_name in known_customers:
+        if ext_id == matched_id:
+            return ext_id, known_name
+    return None
+
+
 class ResolveCustomer:
     """Prefer an existing customer spelling over creating a near-duplicate."""
 
@@ -338,28 +367,15 @@ class ResolveCustomer:
         if not raw_name:
             return ctx
 
-        # Exact / suffix-stripped match first
-        raw_n = normalize_customer_name(raw_name)
-        for ext_id, known_name in ctx.known_customers:
-            if normalize_customer_name(known_name) == raw_n:
-                ctx.resolved_customer_id = ext_id
-                ctx.resolved_customer_name = known_name
-                ctx.result.customer_name = known_name
-                return ctx
-
-        candidates = [(ext_id, name) for ext_id, name in ctx.known_customers]
-        # Match against customer-normalized names via a temporary list
-        norm_candidates = [
-            (ext_id, normalize_customer_name(name)) for ext_id, name in ctx.known_customers
-        ]
-        matched_id = _best_match(raw_n, norm_candidates, self.similarity)
-        if matched_id:
-            for ext_id, known_name in candidates:
-                if ext_id == matched_id:
-                    ctx.resolved_customer_id = ext_id
-                    ctx.resolved_customer_name = known_name
-                    ctx.result.customer_name = known_name
-                    return ctx
+        matched = match_known_customer(
+            raw_name, ctx.known_customers, similarity=self.similarity
+        )
+        if matched:
+            ext_id, known_name = matched
+            ctx.resolved_customer_id = ext_id
+            ctx.resolved_customer_name = known_name
+            ctx.result.customer_name = known_name
+            return ctx
 
         ctx.resolved_customer_name = raw_name
         return ctx
