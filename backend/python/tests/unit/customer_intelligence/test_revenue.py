@@ -63,3 +63,29 @@ def test_parse_revenue_missing_returns_none() -> None:
     assert parse_revenue_fields({"Customer": "Acme", "Notes": "Need SSO"}) is None
     assert parse_revenue_fields("") is None
     assert parse_revenue_fields({}) is None
+
+
+def test_parse_arr_revenue_usd_column() -> None:
+    """Real CSV header from freshservice_negative_review_1000_with_arr."""
+    fields = parse_revenue_fields(
+        {
+            "customer_name": "Pioneer Telecom",
+            "ARR Revenue (USD)": "826000",
+            "subject": "Project module feels clunky",
+        }
+    )
+    assert fields is not None
+    assert fields.arr == 826_000.0
+    assert fields.mrr == pytest.approx(826_000.0 / 12.0)
+    assert fields.customer_name == "Pioneer Telecom"
+
+
+def test_parse_arr_revenue_usd_from_nl_text() -> None:
+    text = (
+        "customer_name: Pioneer Telecom, subject: Project module feels clunky, "
+        "ARR Revenue (USD): 826000"
+    )
+    fields = parse_revenue_fields(text)
+    assert fields is not None
+    assert fields.arr == 826_000.0
+    assert fields.customer_name == "Pioneer Telecom"

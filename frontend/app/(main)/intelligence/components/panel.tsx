@@ -23,7 +23,7 @@ export function SurfacePanel({
   return (
     <Box style={{ ...portal.panel, padding: 20, ...style }}>
       {title ? (
-        <Flex justify="between" align="start" mb="4" gap="3" wrap="wrap">
+        <Flex justify="between" align="start" mb="4" gap="3" wrap="wrap" style={{ flexShrink: 0 }}>
           <Flex align="start" gap="2">
             {icon ? (
               <Flex
@@ -64,7 +64,7 @@ export function SurfacePanel({
           {action}
         </Flex>
       ) : null}
-      {children}
+      <Box style={{ flex: 1, minHeight: 0 }}>{children}</Box>
     </Box>
   );
 }

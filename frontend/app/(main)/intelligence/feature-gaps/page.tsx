@@ -8,6 +8,7 @@ import type { FeatureGap } from '../types';
 import { useFeatureGaps, useSourceConnectors } from '../api';
 import {
   Avatar,
+  ColumnHeader,
   EmptyState,
   ErrorState,
   ExportButton,
@@ -24,7 +25,10 @@ import {
   exportRowsToCsv,
   formatCount,
   formatMoney,
+  formatScore,
   portal,
+  relativeScore,
+  resolveFeatureGapScore,
   useClientSort,
 } from '../components';
 
@@ -34,6 +38,7 @@ const SCORE_THRESHOLD = 0.65;
 type SortKey = 'feature_name' | 'total_arr_at_stake' | 'total_mrr_at_stake' | 'customer_count' | 'mention_count' | 'score';
 
 function getSortValue(row: FeatureGap, key: SortKey): string | number {
+  if (key === 'score') return resolveFeatureGapScore(row);
   return row[key];
 }
 
@@ -64,6 +69,11 @@ export default function FeatureGapsPage() {
 
   const maxArr = useMemo(
     () => (data && data.items.length ? Math.max(...data.items.map((g) => g.total_arr_at_stake)) : 0),
+    [data],
+  );
+
+  const maxRawScore = useMemo(
+    () => (data && data.items.length ? Math.max(...data.items.map((g) => resolveFeatureGapScore(g))) : 0),
     [data],
   );
 
@@ -130,21 +140,22 @@ export default function FeatureGapsPage() {
           <Table.Root size="2" style={{ '--table-row-background-color': 'transparent' } as React.CSSProperties}>
             <Table.Header>
               <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
-                <Table.ColumnHeaderCell>#</Table.ColumnHeaderCell>
+                <ColumnHeader>#</ColumnHeader>
                 <SortableHeader label="Feature" sortKey="feature_name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableHeader label="ARR at stake" sortKey="total_arr_at_stake" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="MRR at stake" sortKey="total_mrr_at_stake" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Customers" sortKey="customer_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Score" sortKey="score" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                <Table.ColumnHeaderCell>Top customers</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell />
+                <ColumnHeader>Top customers</ColumnHeader>
+                <ColumnHeader>{null}</ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
               {sorted.map((gap, i) => {
                 const visibleCustomers = gap.top_customers.slice(0, 3);
                 const extraCount = gap.top_customers.length - visibleCustomers.length;
+                const normalized = relativeScore(resolveFeatureGapScore(gap), maxRawScore);
                 return (
                   <Table.Row key={gap.feature_name}>
                     <Table.Cell>
@@ -170,7 +181,7 @@ export default function FeatureGapsPage() {
                     <Table.Cell align="right">{formatCount(gap.customer_count)}</Table.Cell>
                     <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
                     <Table.Cell align="right">
-                      <ScoreBadge label={gap.score.toFixed(2)} value={gap.score} threshold={SCORE_THRESHOLD} />
+                      <ScoreBadge label={formatScore(normalized)} value={normalized} threshold={SCORE_THRESHOLD} />
                     </Table.Cell>
                     <Table.Cell>
                       {visibleCustomers.length === 0 ? (

@@ -25,18 +25,37 @@ export function SortableHeader<K extends string>({
     <Table.ColumnHeaderCell
       align={align}
       onClick={() => onSort(sortKey)}
-      style={{ cursor: 'pointer', userSelect: 'none' }}
+      style={{ cursor: 'pointer', userSelect: 'none', ...portal.tableHeader, color: portal.colors.tableHeaderText }}
     >
       <Flex align="center" justify={align === 'right' ? 'end' : 'start'} gap="1">
-        <Text size="1" weight={active ? 'bold' : 'medium'} style={{ color: active ? portal.strong : portal.muted }}>
+        <Text
+          size="1"
+          weight="bold"
+          style={{ color: active ? portal.colors.blue : portal.colors.tableHeaderText }}
+        >
           {label}
         </Text>
         <MaterialIcon
           name={active ? (dir === 'asc' ? 'arrow_upward' : 'arrow_downward') : 'unfold_more'}
           size={14}
-          color={active ? portal.colors.blue : portal.muted}
+          color={active ? portal.colors.blue : portal.colors.tableHeaderText}
         />
       </Flex>
+    </Table.ColumnHeaderCell>
+  );
+}
+
+/** Non-sortable column header with the same high-contrast ink as SortableHeader. */
+export function ColumnHeader({
+  children,
+  align,
+}: {
+  children: React.ReactNode;
+  align?: 'left' | 'right' | 'center';
+}) {
+  return (
+    <Table.ColumnHeaderCell align={align} style={{ ...portal.tableHeader, color: portal.colors.tableHeaderText }}>
+      {children}
     </Table.ColumnHeaderCell>
   );
 }

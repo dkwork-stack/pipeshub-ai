@@ -8,6 +8,7 @@ import type { PainPoint } from '../types';
 import { usePainPoints, useSourceConnectors } from '../api';
 import {
   Avatar,
+  ColumnHeader,
   ConfidenceBadge,
   EmptyState,
   ErrorState,
@@ -130,13 +131,13 @@ export default function PainPointsPage() {
           <Table.Root size="2">
             <Table.Header>
               <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
-                <Table.ColumnHeaderCell>#</Table.ColumnHeaderCell>
+                <ColumnHeader>#</ColumnHeader>
                 <SortableHeader label="Pain point" sortKey="topic_name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableHeader label="Customers" sortKey="customer_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Confidence" sortKey="max_confidence" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                <Table.ColumnHeaderCell>Top customers</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell />
+                <ColumnHeader>Top customers</ColumnHeader>
+                <ColumnHeader>{null}</ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>

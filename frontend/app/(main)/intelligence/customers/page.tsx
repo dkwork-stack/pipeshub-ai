@@ -8,6 +8,7 @@ import type { CustomerSummary } from '../types';
 import { useCustomers, useSourceConnectors } from '../api';
 import {
   Avatar,
+  ColumnHeader,
   EmptyState,
   ErrorState,
   ExportButton,
@@ -126,15 +127,15 @@ export default function CustomersPage() {
           <Table.Root size="2">
             <Table.Header>
               <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
-                <Table.ColumnHeaderCell>#</Table.ColumnHeaderCell>
+                <ColumnHeader>#</ColumnHeader>
                 <SortableHeader label="Customer" sortKey="customer_name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableHeader label="ARR" sortKey="arr" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="MRR" sortKey="mrr" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                <Table.ColumnHeaderCell>Renewal</Table.ColumnHeaderCell>
+                <ColumnHeader>Renewal</ColumnHeader>
                 <SortableHeader label="Gaps" sortKey="feature_gap_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                <Table.ColumnHeaderCell>Top asks</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell />
+                <ColumnHeader>Top asks</ColumnHeader>
+                <ColumnHeader>{null}</ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>

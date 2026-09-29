@@ -6,6 +6,7 @@ import { Button, Flex, Table, Text } from '@radix-ui/themes';
 import { useIntelligenceOverview } from './api';
 import {
   Avatar,
+  ColumnHeader,
   ConnectorBadges,
   EmptyState,
   ErrorState,
@@ -18,10 +19,14 @@ import {
   SurfacePanel,
   formatCount,
   formatMoney,
+  formatScore,
   portal,
+  relativeScore,
+  resolveFeatureGapScore,
 } from './components';
 
 const linkStyle = { textDecoration: 'none', color: 'inherit' } as const;
+const SCORE_THRESHOLD = 0.65;
 
 export default function IntelligenceOverviewPage() {
   const { data, error, isLoading, mutate } = useIntelligenceOverview(5);
@@ -34,8 +39,16 @@ export default function IntelligenceOverviewPage() {
     [data],
   );
 
+  const maxRawScore = useMemo(
+    () =>
+      data && data.top_feature_gaps.length
+        ? Math.max(...data.top_feature_gaps.map((g) => resolveFeatureGapScore(g)))
+        : 0,
+    [data],
+  );
+
   return (
-    <Flex direction="column">
+    <Flex direction="column" style={{ width: '100%', minWidth: 0 }}>
       <PortalHero
         eyebrow={portal.brand.name}
         title="Gaps ranked by revenue impact"
@@ -89,7 +102,7 @@ export default function IntelligenceOverviewPage() {
             <ConnectorBadges connectors={data.source_connectors} />
           </SurfacePanel>
 
-          <Flex gap="4" wrap="wrap" align="start">
+          <Flex gap="4" wrap="wrap" align="stretch" style={{ width: '100%' }}>
             <SurfacePanel
               title="Top customers"
               subtitle="Ranked by ARR"
@@ -101,17 +114,17 @@ export default function IntelligenceOverviewPage() {
                   </Link>
                 </Button>
               }
-              style={{ flex: '1 1 360px', minWidth: 0 }}
+              style={{ flex: '1 1 360px', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}
             >
               {data.top_customers.length === 0 ? (
                 <EmptyState icon="group" title="No customers yet" />
               ) : (
-                <Table.Root size="2">
+                <Table.Root size="2" style={{ width: '100%' }}>
                   <Table.Header>
-                    <Table.Row>
-                      <Table.ColumnHeaderCell>Customer</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">ARR</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">Gaps</Table.ColumnHeaderCell>
+                    <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                      <ColumnHeader>Customer</ColumnHeader>
+                      <ColumnHeader align="right">ARR</ColumnHeader>
+                      <ColumnHeader align="right">Gaps</ColumnHeader>
                     </Table.Row>
                   </Table.Header>
                   <Table.Body>
@@ -150,7 +163,7 @@ export default function IntelligenceOverviewPage() {
                   </Link>
                 </Button>
               }
-              style={{ flex: '1 1 480px', minWidth: 0 }}
+              style={{ flex: '1 1 480px', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}
             >
               {data.top_feature_gaps.length === 0 ? (
                 <EmptyState
@@ -159,42 +172,49 @@ export default function IntelligenceOverviewPage() {
                   description="Upload support tickets, CRM notes or call transcripts to a collection to start seeing gaps."
                 />
               ) : (
-                <Table.Root size="2">
+                <Table.Root size="2" style={{ width: '100%' }}>
                   <Table.Header>
-                    <Table.Row>
-                      <Table.ColumnHeaderCell>Feature</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">ARR</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">Customers</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell align="right">Score</Table.ColumnHeaderCell>
+                    <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                      <ColumnHeader>Feature</ColumnHeader>
+                      <ColumnHeader align="right">ARR</ColumnHeader>
+                      <ColumnHeader align="right">Customers</ColumnHeader>
+                      <ColumnHeader align="right">Mentions</ColumnHeader>
+                      <ColumnHeader align="right">Score</ColumnHeader>
                     </Table.Row>
                   </Table.Header>
                   <Table.Body>
-                    {data.top_feature_gaps.map((gap) => (
-                      <Table.Row key={gap.feature_name}>
-                        <Table.RowHeaderCell>
-                          <Link
-                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}
-                            style={linkStyle}
-                          >
-                            <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
-                              {gap.feature_name}
-                            </Text>
-                          </Link>
-                        </Table.RowHeaderCell>
-                        <Table.Cell align="right">
-                          <Flex direction="column" align="end" gap="0">
-                            <Text size="2">{formatMoney(gap.total_arr_at_stake, true)}</Text>
-                            <MiniBar value={gap.total_arr_at_stake} max={maxArr} />
-                          </Flex>
-                        </Table.Cell>
-                        <Table.Cell align="right">{formatCount(gap.customer_count)}</Table.Cell>
-                        <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
-                        <Table.Cell align="right">
-                          <ScoreBadge label={gap.score.toFixed(2)} value={gap.score} threshold={0.65} />
-                        </Table.Cell>
-                      </Table.Row>
-                    ))}
+                    {data.top_feature_gaps.map((gap) => {
+                      const normalized = relativeScore(resolveFeatureGapScore(gap), maxRawScore);
+                      return (
+                        <Table.Row key={gap.feature_name}>
+                          <Table.RowHeaderCell>
+                            <Link
+                              href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}
+                              style={linkStyle}
+                            >
+                              <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
+                                {gap.feature_name}
+                              </Text>
+                            </Link>
+                          </Table.RowHeaderCell>
+                          <Table.Cell align="right">
+                            <Flex direction="column" align="end" gap="0">
+                              <Text size="2">{formatMoney(gap.total_arr_at_stake, true)}</Text>
+                              <MiniBar value={gap.total_arr_at_stake} max={maxArr} />
+                            </Flex>
+                          </Table.Cell>
+                          <Table.Cell align="right">{formatCount(gap.customer_count)}</Table.Cell>
+                          <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
+                          <Table.Cell align="right">
+                            <ScoreBadge
+                              label={formatScore(normalized)}
+                              value={normalized}
+                              threshold={SCORE_THRESHOLD}
+                            />
+                          </Table.Cell>
+                        </Table.Row>
+                      );
+                    })}
                   </Table.Body>
                 </Table.Root>
               )}

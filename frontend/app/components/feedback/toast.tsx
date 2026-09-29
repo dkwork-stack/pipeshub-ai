@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Flex, Box, Text, IconButton } from '@radix-ui/themes';
+import { usePathname } from 'next/navigation';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { LapTimerIcon } from '@/app/components/ui/lap-timer-icon';
@@ -47,6 +48,44 @@ const VARIANT_CONFIG: Record<ToastVariant, VariantConfig> = {
   },
 };
 
+/** Cooper portal toast palette — only applied on /intelligence routes. */
+const COOPER_VARIANT_CONFIG: Record<ToastVariant, VariantConfig> = {
+  loading: {
+    icon: 'timer',
+    iconColor: '#2563eb',
+    iconBgColor: '#eff6ff',
+  },
+  success: {
+    icon: 'check',
+    iconColor: '#16a34a',
+    iconBgColor: '#dcfce7',
+  },
+  error: {
+    icon: 'error_outline',
+    iconColor: '#dc2626',
+    iconBgColor: '#fee2e2',
+  },
+  info: {
+    icon: 'info',
+    iconColor: '#2563eb',
+    iconBgColor: '#eff6ff',
+  },
+  warning: {
+    icon: 'warning',
+    iconColor: '#d97706',
+    iconBgColor: '#fef3c7',
+  },
+};
+
+const COOPER_TOAST_SURFACE = {
+  background: '#ffffff',
+  border: '1px solid #e8edf5',
+  borderRadius: 12,
+  boxShadow: '0 1px 2px rgba(23, 32, 51, 0.04), 0 8px 24px rgba(23, 32, 51, 0.10)',
+  titleColor: '#172033',
+  descriptionColor: '#667085',
+} as const;
+
 // ========================================
 // Toast Component Props
 // ========================================
@@ -64,7 +103,9 @@ function handleDescriptionWheel(event: React.WheelEvent<HTMLDivElement>) {
 
 export function Toast({ toast, onDismiss, style }: ToastProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const config = VARIANT_CONFIG[toast.variant];
+  const pathname = usePathname();
+  const isCooper = pathname?.startsWith('/intelligence') ?? false;
+  const config = (isCooper ? COOPER_VARIANT_CONFIG : VARIANT_CONFIG)[toast.variant];
 
   const iconName = toast.icon || config.icon;
   const isLoading = toast.variant === 'loading';
@@ -87,11 +128,12 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
           : 'min(340px, calc(100vw - 32px))',
         maxHeight: 'min(72dvh, calc(100dvh - 96px))',
         boxSizing: 'border-box',
-        background: 'var(--olive-2)',
-        border: '1px solid var(--olive-3)',
-        borderRadius: 'var(--radius-2)',
-        boxShadow:
-          '0 12px 32px -16px var(--slate-a5, rgba(217, 237, 254, 0.15)), 0 12px 60px 0 var(--Black--a3, rgba(0, 0, 0, 0.15))',
+        background: isCooper ? COOPER_TOAST_SURFACE.background : 'var(--olive-2)',
+        border: isCooper ? COOPER_TOAST_SURFACE.border : '1px solid var(--olive-3)',
+        borderRadius: isCooper ? COOPER_TOAST_SURFACE.borderRadius : 'var(--radius-2)',
+        boxShadow: isCooper
+          ? COOPER_TOAST_SURFACE.boxShadow
+          : '0 12px 32px -16px var(--slate-a5, rgba(217, 237, 254, 0.15)), 0 12px 60px 0 var(--Black--a3, rgba(0, 0, 0, 0.15))',
         padding: 'var(--space-3)',
         opacity: toast.isExiting ? 0 : 1,
         transform: toast.isExiting ? 'translateX(100%)' : 'translateX(0)',
@@ -103,7 +145,6 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
       }}
     >
       <Flex align="start" gap="2" style={{ minWidth: 0 }}>
-        {/* Icon */}
         <Box
           style={{
             width: '24px',
@@ -114,7 +155,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: config.iconBgColor,
-            borderRadius: 'var(--radius-2)',
+            borderRadius: isCooper ? 8 : 'var(--radius-2)',
           }}
         >
           {isLoading && !toast.icon ? (
@@ -130,17 +171,17 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
           )}
         </Box>
 
-        {/* Content */}
         <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 0 }}>
           <Text
             size="2"
             weight="medium"
             style={{
-              color: 'var(--slate-12)',
+              color: isCooper ? COOPER_TOAST_SURFACE.titleColor : 'var(--slate-12)',
               whiteSpace: 'normal',
               lineHeight: 1.35,
               overflowWrap: 'anywhere',
               wordBreak: 'break-word',
+              fontFamily: isCooper ? "'Inter', system-ui, sans-serif" : undefined,
             }}
           >
             {toast.title}
@@ -170,7 +211,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                 <Text
                   size="1"
                   style={{
-                    color: 'var(--slate-11)',
+                    color: isCooper ? COOPER_TOAST_SURFACE.descriptionColor : 'var(--slate-11)',
                     lineHeight: 1.45,
                     fontWeight: 300,
                     letterSpacing: '0.04px',
@@ -193,7 +234,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                     <MaterialIcon
                       name={toast.action.icon}
                       size={14}
-                      color="var(--accent-11)"
+                      color={isCooper ? '#2563eb' : 'var(--accent-11)'}
                     />
                   )}
                   <Text size="1" weight="medium" asChild>
@@ -202,7 +243,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                       target={toast.action.openInNewTab ? '_blank' : undefined}
                       rel={toast.action.openInNewTab ? 'noopener noreferrer' : undefined}
                       style={{
-                        color: 'var(--accent-11)',
+                        color: isCooper ? '#2563eb' : 'var(--accent-11)',
                         textDecoration: 'underline',
                         textUnderlineOffset: '2px',
                         cursor: 'pointer',
@@ -215,7 +256,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                     <MaterialIcon
                       name="open_in_new"
                       size={14}
-                      color="var(--accent-11)"
+                      color={isCooper ? '#2563eb' : 'var(--accent-11)'}
                     />
                   )}
                 </Flex>
@@ -227,9 +268,9 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                     style={{
                       height: '24px',
                       padding: '0 8px',
-                      border: '1px solid rgba(0, 6, 46, 0.2)',
-                      borderRadius: '3px',
-                      backgroundColor: 'transparent',
+                      border: isCooper ? '1px solid #e8edf5' : '1px solid rgba(0, 6, 46, 0.2)',
+                      borderRadius: isCooper ? 8 : '3px',
+                      backgroundColor: isCooper ? '#eff6ff' : 'transparent',
                       cursor: 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -240,14 +281,14 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
                       <MaterialIcon
                         name={toast.action.icon}
                         size={16}
-                        color="var(--slate-11)"
+                        color={isCooper ? '#2563eb' : 'var(--slate-11)'}
                       />
                     )}
                     <Text
                       size="1"
                       weight="medium"
                       style={{
-                        color: 'var(--slate-11)',
+                        color: isCooper ? '#2563eb' : 'var(--slate-11)',
                         lineHeight: '16px',
                         letterSpacing: '0.04px',
                       }}
@@ -277,7 +318,7 @@ export function Toast({ toast, onDismiss, style }: ToastProps) {
               cursor: 'pointer',
             }}
           >
-            <MaterialIcon name="close" size={18} color="var(--slate-11)" />
+            <MaterialIcon name="close" size={18} color={isCooper ? '#667085' : 'var(--slate-11)'} />
           </IconButton>
         )}
       </Flex>

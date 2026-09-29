@@ -17,6 +17,14 @@ export const portal = {
     blueSoftBg: '#eff6ff',
     border: '#e8edf5',
     tableHeaderBg: '#f8fafc',
+    /** Column headers — pinned dark so Radix olive gray can't wash them out. */
+    tableHeaderText: '#0f172a',
+  } as const,
+  tableHeader: {
+    color: '#0f172a',
+    fontWeight: 600,
+    fontSize: 12,
+    letterSpacing: '0.01em',
   } as const,
   panel: {
     backgroundColor: '#ffffff',

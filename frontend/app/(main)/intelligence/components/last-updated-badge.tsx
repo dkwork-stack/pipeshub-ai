@@ -5,7 +5,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { formatDate } from './format';
 import { portal } from './theme';
 
-/** Highlighted "last evidence" indicator — real date only, single-row layout. */
+/** Real last-mention date from overview — copy matches product: "Last evidence {date}". */
 export function LastUpdatedBadge({ date }: { date: string | null | undefined }) {
   if (!date) return null;
   return (
@@ -28,7 +28,7 @@ export function LastUpdatedBadge({ date }: { date: string | null | undefined }) 
         <MaterialIcon name="event_available" size={15} color={portal.colors.blue} />
       </Flex>
       <Text size="2" style={{ color: portal.muted }}>
-        Last updated
+        Last evidence
       </Text>
       <Text size="2" weight="bold" style={{ color: portal.colors.blue }}>
         {formatDate(date)}

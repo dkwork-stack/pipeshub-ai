@@ -71,18 +71,24 @@ def is_revenue_source(connector: str) -> bool:
     }
 
 
+_PAREN = re.compile(r"\([^)]*\)")
+_TOKEN_SPLIT = re.compile(r"[\s_/.\-]+")
+
+
 def parse_revenue_fields(row: Mapping[str, Any] | str) -> Optional[RevenueFields]:
     """Extract ARR/MRR (and optional customer name) from cells or NL row text.
 
     Returns None when neither ARR nor MRR is present or parseable.
     Missing ARR is derived as MRR×12; missing MRR as ARR/12.
+    Header matching is exact for known aliases, or token-based (e.g.
+    ``ARR Revenue (USD)`` → arr).
     """
     cells = _as_cells(row)
     if not cells:
         return None
 
-    arr = _first_money(cells, _ARR_KEYS)
-    mrr = _first_money(cells, _MRR_KEYS)
+    arr = _first_money(cells, kind="arr")
+    mrr = _first_money(cells, kind="mrr")
     if arr is None and mrr is None:
         return None
     if arr is None and mrr is not None:
@@ -117,12 +123,34 @@ def _parse_nl_row(text: str) -> dict[str, Any]:
 
 
 def _norm_key(key: str) -> str:
-    return re.sub(r"\s+", " ", (key or "").strip().lower())
+    cleaned = _PAREN.sub(" ", (key or "").strip().lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _first_money(cells: Mapping[str, Any], keys: frozenset[str]) -> Optional[float]:
+def _tokens(key: str) -> set[str]:
+    return {t for t in _TOKEN_SPLIT.split(_norm_key(key)) if t}
+
+
+def _is_money_key(key: str, kind: str) -> bool:
+    n = _norm_key(key)
+    aliases = _ARR_KEYS if kind == "arr" else _MRR_KEYS
+    if n in aliases:
+        return True
+    token = "arr" if kind == "arr" else "mrr"
+    toks = _tokens(key)
+    if token in toks:
+        return True
+    # Phrases without the short token, e.g. "annual recurring revenue"
+    if kind == "arr" and "annual" in toks and "recurring" in toks:
+        return True
+    if kind == "mrr" and "monthly" in toks and "recurring" in toks:
+        return True
+    return False
+
+
+def _first_money(cells: Mapping[str, Any], *, kind: str) -> Optional[float]:
     for key, value in cells.items():
-        if _norm_key(key) in keys:
+        if _is_money_key(key, kind):
             parsed = _parse_money(value)
             if parsed is not None:
                 return parsed

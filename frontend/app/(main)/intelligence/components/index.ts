@@ -12,7 +12,7 @@ export {
   isNotFoundError,
 } from './states';
 export { FiltersBar, PaginationBar } from './filters';
-export { formatConfidence, formatCount, formatDate, formatMoney, formatScore } from './format';
+export { formatConfidence, formatCount, formatDate, formatMoney, formatScore, computeFeatureGapScore, resolveFeatureGapScore, relativeScore } from './format';
 export { ConfidenceBadge, CONFIDENCE_THRESHOLD } from './confidence-badge';
 export { ScoreBadge } from './score-badge';
 export { TopicGuidancePanel } from './topic-guidance-panel';
@@ -22,7 +22,7 @@ export { RowIndexBadge } from './row-index-badge';
 export { RowMenu } from './row-menu';
 export { MiniBar } from './mini-bar';
 export { LastUpdatedBadge } from './last-updated-badge';
-export { SortableHeader } from './sortable-header';
+export { SortableHeader, ColumnHeader } from './sortable-header';
 export { useClientSort } from './use-client-sort';
 export type { SortDirection } from './use-client-sort';
 export { exportRowsToCsv } from './export-csv';

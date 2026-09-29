@@ -442,6 +442,36 @@ summary {
   scrollbar-width: none;
 }
 
+/* Cooper /intelligence portal — fluid layout helpers */
+.intelligence-shell {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+}
+.intelligence-content {
+  min-width: 0;
+}
+.intelligence-content-inner {
+  width: 100%;
+  max-width: 1180px;
+  box-sizing: border-box;
+}
+/* Radix olive gray washes out table headers on white — force Cooper ink. */
+.intelligence-shell .rt-TableColumnHeaderCell {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+}
+.intelligence-shell .rt-TableColumnHeaderCell .rt-Text {
+  color: inherit !important;
+}
+@media (max-width: 900px) {
+  .intelligence-content-inner {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+}
+
 /* Always-visible, themed scrollbar used by the upload data dialog so users
    can clearly see when more files/folders are available below the fold
    (macOS overlay scrollbars would otherwise stay hidden until the user
