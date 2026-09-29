@@ -4,17 +4,18 @@ import Link from 'next/link';
 import { Button, Flex, Table, Text } from '@radix-ui/themes';
 import { useIntelligenceOverview } from './api';
 import {
+  Avatar,
   ConnectorBadges,
   EmptyState,
   ErrorState,
+  LastUpdatedBadge,
   LoadingRows,
   PortalHero,
+  ScoreBadge,
   StatStrip,
   SurfacePanel,
   formatCount,
-  formatDate,
   formatMoney,
-  formatScore,
   portal,
 } from './components';
 
@@ -27,13 +28,7 @@ export default function IntelligenceOverviewPage() {
         eyebrow={portal.brand.name}
         title="Gaps ranked by revenue impact"
         subtitle="See what customers ask for, how much ARR is at stake, and the evidence behind every request."
-        actions={
-          data?.last_mention_at ? (
-            <Text size="2" style={{ color: portal.muted }}>
-              Last evidence {formatDate(data.last_mention_at)}
-            </Text>
-          ) : null
-        }
+        actions={<LastUpdatedBadge date={data?.last_mention_at} />}
       />
 
       {error ? <ErrorState error={error} onRetry={() => void mutate()} /> : null}
@@ -45,27 +40,32 @@ export default function IntelligenceOverviewPage() {
             items={[
               {
                 icon: 'payments',
+                color: 'green',
                 label: 'ARR at stake',
                 value: formatMoney(data.total_arr_at_stake, true),
                 hint: 'Across customers with at least one gap',
               },
               {
                 icon: 'calendar_month',
+                color: 'blue',
                 label: 'MRR at stake',
                 value: formatMoney(data.total_mrr_at_stake, true),
               },
               {
                 icon: 'extension',
+                color: 'purple',
                 label: 'Feature gaps',
                 value: formatCount(data.feature_gap_count),
               },
               {
-                icon: 'groups',
+                icon: 'group',
+                color: 'pink',
                 label: 'Customers',
                 value: formatCount(data.customer_count),
               },
               {
                 icon: 'format_quote',
+                color: 'amber',
                 label: 'Mentions',
                 value: formatCount(data.mention_count),
                 hint: 'Cited pieces of evidence',
@@ -73,8 +73,8 @@ export default function IntelligenceOverviewPage() {
             ]}
           />
 
-          <Flex align="center" gap="2" wrap="wrap" mb="5">
-            <Text size="2" style={{ color: portal.muted }}>
+          <Flex direction="column" gap="2" mb="5">
+            <Text size="2" weight="medium" style={{ color: portal.strong }}>
               Connected sources
             </Text>
             <ConnectorBadges connectors={data.source_connectors} />
@@ -83,6 +83,8 @@ export default function IntelligenceOverviewPage() {
           <Flex gap="4" wrap="wrap" align="start">
             <SurfacePanel
               title="Top feature gaps"
+              subtitle="Ranked by ARR at stake"
+              icon="emoji_events"
               action={
                 <Button asChild size="1" variant="soft" style={portal.button.secondary}>
                   <Link href="/intelligence/feature-gaps">View all</Link>
@@ -120,7 +122,9 @@ export default function IntelligenceOverviewPage() {
                         <Table.Cell align="right">{formatMoney(gap.total_arr_at_stake, true)}</Table.Cell>
                         <Table.Cell align="right">{formatCount(gap.customer_count)}</Table.Cell>
                         <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
-                        <Table.Cell align="right">{formatScore(gap.score)}</Table.Cell>
+                        <Table.Cell align="right">
+                          <ScoreBadge label={gap.score.toFixed(2)} value={gap.score} threshold={0.65} />
+                        </Table.Cell>
                       </Table.Row>
                     ))}
                   </Table.Body>
@@ -130,6 +134,8 @@ export default function IntelligenceOverviewPage() {
 
             <SurfacePanel
               title="Top customers"
+              subtitle="Ranked by ARR"
+              icon="group"
               action={
                 <Button asChild size="1" variant="soft" style={portal.button.secondary}>
                   <Link href="/intelligence/customers">View all</Link>
@@ -138,7 +144,7 @@ export default function IntelligenceOverviewPage() {
               style={{ flex: '1 1 360px', minWidth: 0 }}
             >
               {data.top_customers.length === 0 ? (
-                <EmptyState icon="groups" title="No customers yet" />
+                <EmptyState icon="group" title="No customers yet" />
               ) : (
                 <Table.Root size="2">
                   <Table.Header>
@@ -153,9 +159,12 @@ export default function IntelligenceOverviewPage() {
                       <Table.Row key={c.external_customer_id}>
                         <Table.RowHeaderCell>
                           <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                            <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
-                              {c.customer_name}
-                            </Text>
+                            <Flex align="center" gap="2">
+                              <Avatar name={c.customer_name} size={24} />
+                              <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
+                                {c.customer_name}
+                              </Text>
+                            </Flex>
                           </Link>
                         </Table.RowHeaderCell>
                         <Table.Cell align="right">{formatMoney(c.latest_revenue?.arr, true)}</Table.Cell>

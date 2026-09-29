@@ -1,7 +1,8 @@
 'use client';
 
-import { Badge, Button, Flex, Text } from '@radix-ui/themes';
+import { Button, Flex, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ConnectorIcon, resolveConnectorType } from '@/app/components/ui/ConnectorIcon';
 import { ErrorType, isProcessedError } from '@/lib/api';
 import { portal } from './theme';
 
@@ -76,11 +77,23 @@ export function LoadingRows({ rows = 5 }: { rows?: number }) {
 export function ConnectorBadges({ connectors }: { connectors: string[] }) {
   if (connectors.length === 0) return <Text size="1" style={{ color: portal.muted }}>—</Text>;
   return (
-    <Flex gap="1" wrap="wrap">
+    <Flex gap="2" wrap="wrap">
       {connectors.map((c) => (
-        <Badge key={c} variant="soft" size="1" style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}>
-          {c}
-        </Badge>
+        <Flex
+          key={c}
+          align="center"
+          gap="2"
+          style={{
+            ...portal.input,
+            borderRadius: 999,
+            padding: '6px 12px',
+          }}
+        >
+          <ConnectorIcon type={resolveConnectorType(c)} size={15} color={portal.muted} />
+          <Text size="1" weight="medium" style={{ color: portal.strong }}>
+            {c}
+          </Text>
+        </Flex>
       ))}
     </Flex>
   );

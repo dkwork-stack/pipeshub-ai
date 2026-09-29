@@ -211,7 +211,7 @@ function CustomerDetailContent() {
             action={
               <Flex gap="2">
                 <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                  <Select.Trigger style={{ minWidth: 150 }} />
+                  <Select.Trigger style={{ minWidth: 150, ...portal.input }} />
                   <Select.Content>
                     <Select.Item value={ALL}>All sources</Select.Item>
                     {(connectors ?? []).map((c) => (
@@ -226,7 +226,7 @@ function CustomerDetailContent() {
                   value={minConfidence || ALL}
                   onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
                 >
-                  <Select.Trigger style={{ minWidth: 130 }} />
+                  <Select.Trigger style={{ minWidth: 130, ...portal.input }} />
                   <Select.Content>
                     {CONF_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>

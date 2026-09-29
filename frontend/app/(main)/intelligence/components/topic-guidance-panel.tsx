@@ -87,6 +87,7 @@ export function TopicGuidancePanel({
         value={guidance}
         onChange={(e) => setGuidance(e.target.value)}
         placeholder={'Include Okta / SAML SSO.\nexclude: generic login bugs'}
+        style={portal.input}
       />
       <Flex direction="column" gap="1">
         <Text size="1" weight="medium">
@@ -96,6 +97,7 @@ export function TopicGuidancePanel({
           value={aliasesText}
           onChange={(e) => setAliasesText(e.target.value)}
           placeholder="SAML login, single sign-on"
+          style={portal.input}
         />
       </Flex>
       <Flex align="center" gap="2" wrap="wrap">
@@ -105,7 +107,7 @@ export function TopicGuidancePanel({
         {others.length > 0 ? (
           <>
             <Select.Root size="1" value={mergeTargetId || '__none__'} onValueChange={(v) => setMergeTargetId(v === '__none__' ? '' : v)}>
-              <Select.Trigger placeholder="Merge into…" style={{ minWidth: 180 }} />
+              <Select.Trigger placeholder="Merge into…" style={{ minWidth: 180, ...portal.input }} />
               <Select.Content>
                 <Select.Item value="__none__">Merge into…</Select.Item>
                 {others.map((t: IntelligenceTopic) => (

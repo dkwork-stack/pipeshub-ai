@@ -4,22 +4,43 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Badge, Flex, Table, Text } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
+import type { CustomerSummary } from '../types';
 import { useCustomers, useSourceConnectors } from '../api';
 import {
+  Avatar,
   EmptyState,
   ErrorState,
+  ExportButton,
   FiltersBar,
   LoadingRows,
   PaginationBar,
   PortalHero,
+  RowIndexBadge,
+  RowMenu,
+  SortableHeader,
   SurfacePanel,
+  exportRowsToCsv,
   formatCount,
   formatDate,
   formatMoney,
   portal,
+  useClientSort,
 } from '../components';
 
 const PAGE_SIZE = 25;
+
+type SortKey = 'customer_name' | 'arr' | 'mrr' | 'feature_gap_count' | 'mention_count';
+
+function getSortValue(row: CustomerSummary, key: SortKey): string | number | null | undefined {
+  switch (key) {
+    case 'arr':
+      return row.latest_revenue?.arr;
+    case 'mrr':
+      return row.latest_revenue?.mrr;
+    default:
+      return row[key];
+  }
+}
 
 export default function CustomersPage() {
   const [query, setQuery] = useState('');
@@ -40,9 +61,32 @@ export default function CustomersPage() {
     offset,
   });
 
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort<CustomerSummary, SortKey>(
+    data?.items,
+    getSortValue,
+    'arr',
+  );
+
   const resetAnd = <T,>(setter: (v: T) => void) => (v: T) => {
     setter(v);
     setOffset(0);
+  };
+
+  const handleExport = () => {
+    if (!sorted) return;
+    exportRowsToCsv(
+      'customers.csv',
+      [
+        { header: 'Customer', accessor: (r: CustomerSummary) => r.customer_name },
+        { header: 'Customer ID', accessor: (r: CustomerSummary) => r.external_customer_id },
+        { header: 'ARR', accessor: (r: CustomerSummary) => r.latest_revenue?.arr ?? '' },
+        { header: 'MRR', accessor: (r: CustomerSummary) => r.latest_revenue?.mrr ?? '' },
+        { header: 'Renewal', accessor: (r: CustomerSummary) => r.latest_revenue?.renewal_date ?? '' },
+        { header: 'Feature gaps', accessor: (r: CustomerSummary) => r.feature_gap_count },
+        { header: 'Mentions', accessor: (r: CustomerSummary) => r.mention_count },
+      ],
+      sorted,
+    );
   };
 
   return (
@@ -64,39 +108,55 @@ export default function CustomersPage() {
         searchPlaceholder="Search customer name or ID…"
       />
 
-      <SurfacePanel>
+      <SurfacePanel
+        title={`Customers${data ? ` (${formatCount(data.page.total)})` : ''}`}
+        action={
+          <Flex align="center" gap="3">
+            <ExportButton onExport={handleExport} disabled={!sorted?.length} />
+            <PaginationBar page={data?.page} onOffsetChange={setOffset} />
+          </Flex>
+        }
+      >
         {error ? <ErrorState error={error} onRetry={() => void mutate()} /> : null}
         {isLoading && !data ? <LoadingRows rows={8} /> : null}
         {data && data.items.length === 0 ? (
-          <EmptyState icon="groups" title="No customers match" description="Try clearing filters." />
+          <EmptyState icon="group" title="No customers match" description="Try clearing filters." />
         ) : null}
-        {data && data.items.length > 0 ? (
+        {sorted && sorted.length > 0 ? (
           <Table.Root size="2">
             <Table.Header>
-              <Table.Row>
-                <Table.ColumnHeaderCell>Customer</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell align="right">ARR</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell align="right">MRR</Table.ColumnHeaderCell>
+              <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                <Table.ColumnHeaderCell>#</Table.ColumnHeaderCell>
+                <SortableHeader label="Customer" sortKey="customer_name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableHeader label="ARR" sortKey="arr" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <SortableHeader label="MRR" sortKey="mrr" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <Table.ColumnHeaderCell>Renewal</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell align="right">Gaps</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
+                <SortableHeader label="Gaps" sortKey="feature_gap_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <Table.ColumnHeaderCell>Top asks</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell />
               </Table.Row>
             </Table.Header>
             <Table.Body>
-              {data.items.map((c) => (
+              {sorted.map((c, i) => (
                 <Table.Row key={c.external_customer_id}>
+                  <Table.Cell>
+                    <RowIndexBadge index={offset + i + 1} />
+                  </Table.Cell>
                   <Table.RowHeaderCell>
-                    <Flex direction="column">
-                      <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
-                        <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
-                          {c.customer_name}
-                        </Text>
-                      </Link>
-                      <Text size="1" style={{ color: portal.muted }}>
-                        {c.external_customer_id}
-                      </Text>
-                    </Flex>
+                    <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
+                      <Flex align="center" gap="2">
+                        <Avatar name={c.customer_name} size={28} />
+                        <Flex direction="column" gap="0">
+                          <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
+                            {c.customer_name}
+                          </Text>
+                          <Text size="1" style={{ color: portal.muted }}>
+                            {c.external_customer_id}
+                          </Text>
+                        </Flex>
+                      </Flex>
+                    </Link>
                   </Table.RowHeaderCell>
                   <Table.Cell align="right">{formatMoney(c.latest_revenue?.arr)}</Table.Cell>
                   <Table.Cell align="right">{formatMoney(c.latest_revenue?.mrr)}</Table.Cell>
@@ -104,28 +164,31 @@ export default function CustomersPage() {
                   <Table.Cell align="right">{formatCount(c.feature_gap_count)}</Table.Cell>
                   <Table.Cell align="right">{formatCount(c.mention_count)}</Table.Cell>
                   <Table.Cell>
-                    <Flex gap="1" wrap="wrap">
+                    <Flex direction="column" gap="1" align="start">
                       {c.top_insights.length === 0 ? (
                         <Text size="1" style={{ color: portal.muted }}>
                           —
                         </Text>
                       ) : (
-                        c.top_insights.map((i) => (
+                        c.top_insights.map((insight) => (
                           <Link
-                            key={i.feature_name}
-                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(i.feature_name)}`}
+                            key={insight.feature_name}
+                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(insight.feature_name)}`}
                           >
                             <Badge
                               variant="soft"
                               size="1"
                               style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}
                             >
-                              {i.feature_name} · {i.mention_count}
+                              {insight.feature_name} · {insight.mention_count}
                             </Badge>
                           </Link>
                         ))
                       )}
                     </Flex>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <RowMenu detailHref={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`} />
                   </Table.Cell>
                 </Table.Row>
               ))}
@@ -133,8 +196,6 @@ export default function CustomersPage() {
           </Table.Root>
         ) : null}
       </SurfacePanel>
-
-      <PaginationBar page={data?.page} onOffsetChange={setOffset} />
     </Flex>
   );
 }

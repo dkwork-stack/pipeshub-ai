@@ -86,7 +86,7 @@ function PainPointDetailContent() {
         <>
           <StatStrip
             items={[
-              { icon: 'groups', label: 'Customers', value: formatCount(data.customer_count) },
+              { icon: 'group', label: 'Customers', value: formatCount(data.customer_count) },
               { icon: 'format_quote', label: 'Mentions', value: formatCount(data.mention_count) },
               {
                 icon: 'verified',
@@ -102,7 +102,7 @@ function PainPointDetailContent() {
 
           <SurfacePanel title="Affected customers">
             {data.affected_customers.length === 0 ? (
-              <EmptyState icon="groups" title="No customers" />
+              <EmptyState icon="group" title="No customers" />
             ) : (
               <Table.Root size="1">
                 <Table.Header>
@@ -136,7 +136,7 @@ function PainPointDetailContent() {
             action={
               <Flex gap="2">
                 <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                  <Select.Trigger style={{ minWidth: 150 }} />
+                  <Select.Trigger style={{ minWidth: 150, ...portal.input }} />
                   <Select.Content>
                     <Select.Item value={ALL}>All sources</Select.Item>
                     {(connectors ?? []).map((c) => (
@@ -151,7 +151,7 @@ function PainPointDetailContent() {
                   value={minConfidence || ALL}
                   onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
                 >
-                  <Select.Trigger style={{ minWidth: 130 }} />
+                  <Select.Trigger style={{ minWidth: 130, ...portal.input }} />
                   <Select.Content>
                     {CONF_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
