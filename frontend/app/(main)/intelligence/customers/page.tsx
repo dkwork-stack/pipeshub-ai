@@ -144,7 +144,10 @@ export default function CustomersPage() {
                     <RowIndexBadge index={offset + i + 1} />
                   </Table.Cell>
                   <Table.RowHeaderCell>
-                    <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}>
+                    <Link
+                      href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`}
+                      style={{ textDecoration: 'none' }}
+                    >
                       <Flex align="center" gap="2">
                         <Avatar name={c.customer_name} size={28} />
                         <Flex direction="column" gap="0">

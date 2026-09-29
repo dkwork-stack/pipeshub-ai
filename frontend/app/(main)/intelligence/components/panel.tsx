@@ -43,7 +43,14 @@ export function SurfacePanel({
             <Flex direction="column" gap="0">
               <Heading
                 size="4"
-                style={{ color: portal.strong, fontFamily: portal.displayFont, letterSpacing: '-0.02em' }}
+                style={{
+                  // Radix Heading defaults to theme gray which reads washed on white —
+                  // pin to the portal strong ink so panel titles stay crisp.
+                  color: portal.colors.text,
+                  fontFamily: portal.displayFont,
+                  letterSpacing: '-0.02em',
+                  fontWeight: 700,
+                }}
               >
                 {title}
               </Heading>

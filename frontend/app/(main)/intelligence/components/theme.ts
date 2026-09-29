@@ -22,7 +22,8 @@ export const portal = {
     backgroundColor: '#ffffff',
     border: '1px solid #e8edf5',
     borderRadius: 12,
-    boxShadow: 'none',
+    // Soft elevation so cards lift off the white page without looking heavy.
+    boxShadow: '0 1px 2px rgba(23, 32, 51, 0.04), 0 6px 16px rgba(23, 32, 51, 0.06)',
   } as const,
   sidebar: {
     width: 244,

@@ -149,7 +149,10 @@ export default function PainPointsPage() {
                       <RowIndexBadge index={offset + i + 1} />
                     </Table.Cell>
                     <Table.RowHeaderCell>
-                      <Link href={`/intelligence/pain-points/detail?name=${encodeURIComponent(item.topic_name)}`}>
+                      <Link
+                        href={`/intelligence/pain-points/detail?name=${encodeURIComponent(item.topic_name)}`}
+                        style={{ textDecoration: 'none' }}
+                      >
                         <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                           {item.topic_name}
                         </Text>

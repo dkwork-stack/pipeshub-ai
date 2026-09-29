@@ -151,7 +151,10 @@ export default function FeatureGapsPage() {
                       <RowIndexBadge index={offset + i + 1} />
                     </Table.Cell>
                     <Table.RowHeaderCell>
-                      <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}>
+                      <Link
+                        href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`}
+                        style={{ textDecoration: 'none' }}
+                      >
                         <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
                           {gap.feature_name}
                         </Text>

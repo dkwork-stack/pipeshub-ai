@@ -8,9 +8,9 @@ import { portal } from './theme';
 
 const NAV = [
   { href: '/intelligence', label: 'Overview', icon: 'dashboard', exact: true },
+  { href: '/intelligence/customers', label: 'Customers', icon: 'group' },
   { href: '/intelligence/feature-gaps', label: 'Feature Gaps', icon: 'extension' },
   { href: '/intelligence/pain-points', label: 'Pain Points', icon: 'report_problem' },
-  { href: '/intelligence/customers', label: 'Customers', icon: 'group' },
 ] as const;
 
 function isActive(pathname: string, href: string, exact?: boolean) {

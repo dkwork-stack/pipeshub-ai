@@ -5,7 +5,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { formatDate } from './format';
 import { portal } from './theme';
 
-/** Highlighted "last evidence" indicator — real date only, no fake "as of" filter. */
+/** Highlighted "last evidence" indicator — real date only, single-row layout. */
 export function LastUpdatedBadge({ date }: { date: string | null | undefined }) {
   if (!date) return null;
   return (
@@ -17,6 +17,7 @@ export function LastUpdatedBadge({ date }: { date: string | null | undefined }) 
         border: `1px solid ${portal.colors.border}`,
         borderRadius: 999,
         padding: '8px 14px 8px 8px',
+        whiteSpace: 'nowrap',
       }}
     >
       <Flex
@@ -26,14 +27,12 @@ export function LastUpdatedBadge({ date }: { date: string | null | undefined }) 
       >
         <MaterialIcon name="event_available" size={15} color={portal.colors.blue} />
       </Flex>
-      <Flex direction="column" gap="0">
-        <Text size="1" style={{ color: portal.muted, lineHeight: 1.2 }}>
-          Last updated
-        </Text>
-        <Text size="2" weight="bold" style={{ color: portal.colors.blue, lineHeight: 1.2 }}>
-          {formatDate(date)}
-        </Text>
-      </Flex>
+      <Text size="2" style={{ color: portal.muted }}>
+        Last updated
+      </Text>
+      <Text size="2" weight="bold" style={{ color: portal.colors.blue }}>
+        {formatDate(date)}
+      </Text>
     </Flex>
   );
 }
