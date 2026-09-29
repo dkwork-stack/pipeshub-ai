@@ -11,6 +11,7 @@ export {
   LoadingRows,
   isNotFoundError,
 } from './states';
+export { SourceConnectorIcon, formatConnectorLabel } from './connector-display';
 export { FiltersBar, PaginationBar } from './filters';
 export { formatConfidence, formatCount, formatDate, formatMoney, formatScore, computeFeatureGapScore, resolveFeatureGapScore, relativeScore } from './format';
 export { ConfidenceBadge, CONFIDENCE_THRESHOLD } from './confidence-badge';
@@ -28,3 +29,4 @@ export type { SortDirection } from './use-client-sort';
 export { exportRowsToCsv } from './export-csv';
 export type { CsvColumn } from './export-csv';
 export { ExportButton } from './export-button';
+export { TopAsksPills } from './top-asks-pills';

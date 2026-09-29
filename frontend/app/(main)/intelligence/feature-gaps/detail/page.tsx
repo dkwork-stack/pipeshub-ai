@@ -23,6 +23,7 @@ import {
   SurfacePanel,
   TopicGuidancePanel,
   formatConfidence,
+  formatConnectorLabel,
   formatCount,
   formatMoney,
   formatScore,
@@ -169,7 +170,7 @@ function FeatureGapDetailContent() {
                     <Select.Item value={ALL}>All sources</Select.Item>
                     {(connectors ?? []).map((c) => (
                       <Select.Item key={c} value={c}>
-                        {c}
+                        {formatConnectorLabel(c)}
                       </Select.Item>
                     ))}
                   </Select.Content>

@@ -58,7 +58,6 @@ export default function IntelligenceOverviewPage() {
   return (
     <Flex direction="column" style={{ width: '100%', minWidth: 0 }}>
       <PortalHero
-        eyebrow={portal.brand.name}
         title="Gaps ranked by revenue impact"
         subtitle="See what customers ask for, how much ARR is at stake, and the evidence behind every request."
         actions={<LastUpdatedBadge date={data?.last_mention_at} />}

@@ -23,6 +23,7 @@ import {
   PortalHero,
   StatStrip,
   SurfacePanel,
+  formatConnectorLabel,
   formatCount,
   formatDate,
   formatMoney,
@@ -92,7 +93,7 @@ function CustomerDetailContent() {
                 icon: 'payments',
                 label: 'ARR',
                 value: formatMoney(revenue?.arr, true),
-                hint: revenue ? `via ${revenue.source_connector}` : 'No subscription snapshot',
+                hint: revenue ? `via ${formatConnectorLabel(revenue.source_connector)}` : 'No subscription snapshot',
               },
               { icon: 'calendar_month', label: 'MRR', value: formatMoney(revenue?.mrr, true) },
               { icon: 'event', label: 'Renewal', value: formatDate(revenue?.renewal_date) },
@@ -216,7 +217,7 @@ function CustomerDetailContent() {
                     <Select.Item value={ALL}>All sources</Select.Item>
                     {(connectors ?? []).map((c) => (
                       <Select.Item key={c} value={c}>
-                        {c}
+                        {formatConnectorLabel(c)}
                       </Select.Item>
                     ))}
                   </Select.Content>

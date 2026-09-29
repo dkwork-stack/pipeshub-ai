@@ -2,9 +2,10 @@
 
 import { Button, Flex, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { ConnectorIcon, resolveConnectorType } from '@/app/components/ui/ConnectorIcon';
 import { ErrorType, isProcessedError } from '@/lib/api';
 import { portal } from './theme';
+
+export { ConnectorBadges, SourceConnectorIcon, formatConnectorLabel } from './connector-display';
 
 export function isNotFoundError(error: unknown): boolean {
   return isProcessedError(error) && (error.type === ErrorType.NOT_FOUND || error.statusCode === 404);
@@ -69,31 +70,6 @@ export function LoadingRows({ rows = 5 }: { rows?: number }) {
             opacity: 1 - i * 0.12,
           }}
         />
-      ))}
-    </Flex>
-  );
-}
-
-export function ConnectorBadges({ connectors }: { connectors: string[] }) {
-  if (connectors.length === 0) return <Text size="1" style={{ color: portal.muted }}>—</Text>;
-  return (
-    <Flex gap="2" wrap="wrap">
-      {connectors.map((c) => (
-        <Flex
-          key={c}
-          align="center"
-          gap="2"
-          style={{
-            ...portal.input,
-            borderRadius: 999,
-            padding: '6px 12px',
-          }}
-        >
-          <ConnectorIcon type={resolveConnectorType(c)} size={15} color={portal.muted} />
-          <Text size="1" weight="medium" style={{ color: portal.strong }}>
-            {c}
-          </Text>
-        </Flex>
       ))}
     </Flex>
   );

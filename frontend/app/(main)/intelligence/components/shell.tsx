@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Box, Flex, Text, Tooltip } from '@radix-ui/themes';
@@ -19,24 +20,35 @@ function isActive(pathname: string, href: string, exact?: boolean) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavRail({ compact }: { compact: boolean }) {
+function NavRail() {
   const pathname = usePathname();
-  const width = compact ? 72 : portal.sidebar.width;
+  const isMobile = useIsMobile();
+  const [hovered, setHovered] = useState(false);
+  const expanded = isMobile ? false : hovered;
+  const width = expanded ? portal.sidebar.expandedWidth : portal.sidebar.collapsedWidth;
 
   return (
     <Flex
       direction="column"
       className="intelligence-sidebar"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         flexShrink: 0,
         width,
         height: '100%',
-        backgroundColor: '#ffffff',
-        borderRight: `1px solid ${portal.colors.border}`,
+        backgroundColor: portal.sidebar.backgroundColor,
+        borderRight: `1px solid ${portal.sidebar.border}`,
         transition: 'width 0.2s ease',
+        overflow: 'hidden',
+        zIndex: 2,
       }}
     >
-      <Flex align="center" gap="3" px={compact ? '2' : '4'} style={{ height: 64, flexShrink: 0, justifyContent: compact ? 'center' : undefined }}>
+      <Flex
+        align="center"
+        px={expanded ? '4' : '2'}
+        style={{ height: 64, flexShrink: 0, justifyContent: expanded ? 'flex-start' : 'center' }}
+      >
         <Link
           href="/intelligence"
           style={{
@@ -61,15 +73,24 @@ function NavRail({ compact }: { compact: boolean }) {
           >
             <MaterialIcon name={portal.brand.icon} size={19} color="white" />
           </Box>
-          {!compact ? (
-            <Text size="3" weight="bold" style={{ color: portal.strong, fontFamily: portal.displayFont, letterSpacing: '-0.02em' }}>
+          {expanded ? (
+            <Text
+              size="3"
+              weight="bold"
+              style={{
+                color: portal.sidebar.text,
+                fontFamily: portal.displayFont,
+                letterSpacing: '-0.02em',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {portal.brand.name}
             </Text>
           ) : null}
         </Link>
       </Flex>
 
-      <Flex direction="column" gap="1" px={compact ? '2' : '3'} py="2" style={{ flex: 1 }}>
+      <Flex direction="column" gap="1" px={expanded ? '3' : '2'} py="2" style={{ flex: 1 }}>
         {NAV.map((item) => {
           const active = isActive(pathname, item.href, 'exact' in item ? item.exact : false);
           return (
@@ -79,20 +100,28 @@ function NavRail({ compact }: { compact: boolean }) {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: compact ? 'center' : 'flex-start',
+                  justifyContent: expanded ? 'flex-start' : 'center',
                   gap: 12,
                   height: 40,
                   borderRadius: 10,
-                  padding: compact ? '0' : '0 14px',
+                  padding: expanded ? '0 14px' : '0',
                   textDecoration: 'none',
                   backgroundColor: active ? portal.colors.blue : 'transparent',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                 }}
               >
-                <MaterialIcon name={item.icon} size={20} color={active ? 'white' : portal.muted} />
-                {!compact ? (
-                  <Text size="2" weight={active ? 'bold' : 'medium'} style={{ color: active ? 'white' : portal.muted }}>
+                <MaterialIcon
+                  name={item.icon}
+                  size={20}
+                  color={active ? 'white' : portal.sidebar.muted}
+                />
+                {expanded ? (
+                  <Text
+                    size="2"
+                    weight={active ? 'bold' : 'medium'}
+                    style={{ color: active ? 'white' : portal.sidebar.text }}
+                  >
                     {item.label}
                   </Text>
                 ) : null}
@@ -106,8 +135,6 @@ function NavRail({ compact }: { compact: boolean }) {
 }
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
-  const isMobile = useIsMobile();
-
   return (
     <Flex
       className="intelligence-shell"
@@ -121,7 +148,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
         color: portal.strong,
       }}
     >
-      <NavRail compact={isMobile} />
+      <NavRail />
       <Box
         className="no-scrollbar intelligence-content"
         style={{ flex: 1, height: '100%', minWidth: 0, overflowY: 'auto', overflowX: 'hidden' }}

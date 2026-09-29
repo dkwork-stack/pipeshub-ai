@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { Badge, Flex, Link as RadixLink, Table, Text } from '@radix-ui/themes';
+import { Flex, Link as RadixLink, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { Mention } from '../types';
 import { ConfidenceBadge } from './confidence-badge';
+import { formatConnectorLabel, SourceConnectorIcon } from './connector-display';
 import { formatDate } from './format';
 import { EmptyState } from './states';
 import { portal } from './theme';
@@ -86,9 +87,21 @@ export function MentionsTable({
             </Table.Cell>
             <Table.Cell>
               <Flex direction="column" gap="1">
-                <Badge color="gray" variant="soft" size="1">
-                  {m.source_connector}
-                </Badge>
+                <Flex
+                  align="center"
+                  gap="1"
+                  style={{
+                    ...portal.input,
+                    borderRadius: 999,
+                    padding: '2px 8px',
+                    width: 'fit-content',
+                  }}
+                >
+                  <SourceConnectorIcon connector={m.source_connector} size={14} />
+                  <Text size="1" weight="medium" style={{ color: portal.strong }}>
+                    {formatConnectorLabel(m.source_connector)}
+                  </Text>
+                </Flex>
                 {m.source_type ? (
                   <Text size="1" style={{ color: portal.muted }}>
                     {m.source_type}

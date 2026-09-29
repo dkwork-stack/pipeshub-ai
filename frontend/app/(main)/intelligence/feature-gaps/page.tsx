@@ -44,18 +44,14 @@ function getSortValue(row: FeatureGap, key: SortKey): string | number {
 
 export default function FeatureGapsPage() {
   const [query, setQuery] = useState('');
-  const [minArr, setMinArr] = useState('');
   const [connector, setConnector] = useState('');
   const [offset, setOffset] = useState(0);
 
   const debouncedQuery = useDebouncedSearch(query, 300);
-  const debouncedMinArr = useDebouncedSearch(minArr, 300);
-  const minArrNumber = debouncedMinArr === '' ? undefined : Number(debouncedMinArr);
 
   const { data: connectors } = useSourceConnectors();
   const { data, error, isLoading, mutate } = useFeatureGaps({
     q: debouncedQuery || undefined,
-    min_arr: minArrNumber !== undefined && !Number.isNaN(minArrNumber) ? minArrNumber : undefined,
     source_connector: connector || undefined,
     limit: PAGE_SIZE,
     offset,
@@ -102,7 +98,6 @@ export default function FeatureGapsPage() {
   return (
     <Flex direction="column">
       <PortalHero
-        eyebrow="Demand signal"
         title="Feature gaps"
         subtitle="What customers asked for that the product does not deliver today, ranked by revenue at stake."
       />
@@ -110,8 +105,6 @@ export default function FeatureGapsPage() {
       <FiltersBar
         query={query}
         onQueryChange={resetAnd(setQuery)}
-        minArr={minArr}
-        onMinArrChange={resetAnd(setMinArr)}
         connector={connector}
         onConnectorChange={resetAnd(setConnector)}
         connectors={connectors ?? []}

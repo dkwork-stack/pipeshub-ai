@@ -34,7 +34,12 @@ export const portal = {
     boxShadow: '0 1px 2px rgba(23, 32, 51, 0.04), 0 6px 16px rgba(23, 32, 51, 0.06)',
   } as const,
   sidebar: {
-    width: 244,
+    collapsedWidth: 72,
+    expandedWidth: 244,
+    backgroundColor: '#eff6ff',
+    border: '#dbeafe',
+    text: '#1e3a8a',
+    muted: '#3b82f6',
   } as const,
   /** Inline style overrides — Radix's built-in `color="blue"` scale doesn't
    *  match the mock's exact hex, so buttons apply these directly. */

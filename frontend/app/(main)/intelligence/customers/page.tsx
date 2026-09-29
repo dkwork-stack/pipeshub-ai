@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Badge, Flex, Table, Text } from '@radix-ui/themes';
+import { Flex, Table, Text } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import type { CustomerSummary } from '../types';
 import { useCustomers, useSourceConnectors } from '../api';
@@ -20,6 +20,7 @@ import {
   RowMenu,
   SortableHeader,
   SurfacePanel,
+  TopAsksPills,
   exportRowsToCsv,
   formatCount,
   formatDate,
@@ -45,18 +46,14 @@ function getSortValue(row: CustomerSummary, key: SortKey): string | number | nul
 
 export default function CustomersPage() {
   const [query, setQuery] = useState('');
-  const [minArr, setMinArr] = useState('');
   const [connector, setConnector] = useState('');
   const [offset, setOffset] = useState(0);
 
   const debouncedQuery = useDebouncedSearch(query, 300);
-  const debouncedMinArr = useDebouncedSearch(minArr, 300);
-  const minArrNumber = debouncedMinArr === '' ? undefined : Number(debouncedMinArr);
 
   const { data: connectors } = useSourceConnectors();
   const { data, error, isLoading, mutate } = useCustomers({
     q: debouncedQuery || undefined,
-    min_arr: minArrNumber !== undefined && !Number.isNaN(minArrNumber) ? minArrNumber : undefined,
     source_connector: connector || undefined,
     limit: PAGE_SIZE,
     offset,
@@ -93,7 +90,6 @@ export default function CustomersPage() {
   return (
     <Flex direction="column">
       <PortalHero
-        eyebrow="Accounts"
         title="Customers"
         subtitle="Accounts with recorded feature demand, joined with their latest subscription snapshot."
       />
@@ -101,8 +97,6 @@ export default function CustomersPage() {
       <FiltersBar
         query={query}
         onQueryChange={resetAnd(setQuery)}
-        minArr={minArr}
-        onMinArrChange={resetAnd(setMinArr)}
         connector={connector}
         onConnectorChange={resetAnd(setConnector)}
         connectors={connectors ?? []}
@@ -168,28 +162,7 @@ export default function CustomersPage() {
                   <Table.Cell align="right">{formatCount(c.feature_gap_count)}</Table.Cell>
                   <Table.Cell align="right">{formatCount(c.mention_count)}</Table.Cell>
                   <Table.Cell>
-                    <Flex direction="column" gap="1" align="start">
-                      {c.top_insights.length === 0 ? (
-                        <Text size="1" style={{ color: portal.muted }}>
-                          —
-                        </Text>
-                      ) : (
-                        c.top_insights.map((insight) => (
-                          <Link
-                            key={insight.feature_name}
-                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(insight.feature_name)}`}
-                          >
-                            <Badge
-                              variant="soft"
-                              size="1"
-                              style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}
-                            >
-                              {insight.feature_name} · {insight.mention_count}
-                            </Badge>
-                          </Link>
-                        ))
-                      )}
-                    </Flex>
+                    <TopAsksPills insights={c.top_insights} />
                   </Table.Cell>
                   <Table.Cell>
                     <RowMenu detailHref={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`} />

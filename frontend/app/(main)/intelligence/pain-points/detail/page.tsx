@@ -19,10 +19,12 @@ import {
   ErrorState,
   LoadingRows,
   PortalHero,
+  SourceConnectorIcon,
   StatStrip,
   SurfacePanel,
   TopicGuidancePanel,
   formatConfidence,
+  formatConnectorLabel,
   formatCount,
   formatDate,
   formatMoney,
@@ -141,7 +143,7 @@ function PainPointDetailContent() {
                     <Select.Item value={ALL}>All sources</Select.Item>
                     {(connectors ?? []).map((c) => (
                       <Select.Item key={c} value={c}>
-                        {c}
+                        {formatConnectorLabel(c)}
                       </Select.Item>
                     ))}
                   </Select.Content>
@@ -189,7 +191,10 @@ function PainPointDetailContent() {
                         </Flex>
                       </Table.Cell>
                       <Table.Cell>
-                        <Text size="1">{m.source_connector}</Text>
+                        <Flex align="center" gap="1">
+                          <SourceConnectorIcon connector={m.source_connector} size={14} />
+                          <Text size="1">{formatConnectorLabel(m.source_connector)}</Text>
+                        </Flex>
                       </Table.Cell>
                       <Table.Cell align="right">
                         <ConfidenceBadge value={m.confidence} />

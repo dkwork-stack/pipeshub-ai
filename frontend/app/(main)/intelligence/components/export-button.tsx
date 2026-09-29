@@ -6,14 +6,8 @@ import { portal } from './theme';
 
 export function ExportButton({ onExport, disabled }: { onExport: () => void; disabled?: boolean }) {
   return (
-    <Button
-      size="1"
-      variant="outline"
-      onClick={onExport}
-      disabled={disabled}
-      style={{ ...portal.input, fontWeight: 600 }}
-    >
-      <MaterialIcon name="download" size={14} color={portal.strong} />
+    <Button size="1" onClick={onExport} disabled={disabled} style={portal.button.primary}>
+      <MaterialIcon name="download" size={14} color="#ffffff" />
       Export
     </Button>
   );

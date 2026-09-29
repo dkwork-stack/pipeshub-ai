@@ -3,43 +3,29 @@
 import { Flex, IconButton, Select, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { PageMeta } from '../types';
+import { formatConnectorLabel } from './connector-display';
 import { portal } from './theme';
 
 const ALL_CONNECTORS = '__all__';
 
+/** Search + source filter only — no outer card chrome. */
 export function FiltersBar({
   query,
   onQueryChange,
-  minArr,
-  onMinArrChange,
   connector,
   onConnectorChange,
   connectors,
   searchPlaceholder,
-  hideMinArr = false,
 }: {
   query: string;
   onQueryChange: (v: string) => void;
-  minArr: string;
-  onMinArrChange: (v: string) => void;
   connector: string;
   onConnectorChange: (v: string) => void;
   connectors: string[];
   searchPlaceholder: string;
-  hideMinArr?: boolean;
 }) {
   return (
-    <Flex
-      gap="3"
-      wrap="wrap"
-      align="center"
-      p="3"
-      mb="4"
-      style={{
-        ...portal.panel,
-        borderRadius: 14,
-      }}
-    >
+    <Flex gap="3" wrap="wrap" align="center" mb="4">
       <TextField.Root
         size="2"
         placeholder={searchPlaceholder}
@@ -51,21 +37,6 @@ export function FiltersBar({
           <MaterialIcon name="search" size={16} color={portal.muted} />
         </TextField.Slot>
       </TextField.Root>
-      {!hideMinArr ? (
-        <TextField.Root
-          size="2"
-          type="number"
-          min={0}
-          placeholder="Min ARR (USD)"
-          value={minArr}
-          onChange={(e) => onMinArrChange(e.target.value)}
-          style={{ width: 160, ...portal.input }}
-        >
-          <TextField.Slot>
-            <MaterialIcon name="attach_money" size={16} color={portal.muted} />
-          </TextField.Slot>
-        </TextField.Root>
-      ) : null}
       <Select.Root
         size="2"
         value={connector || ALL_CONNECTORS}
@@ -76,7 +47,7 @@ export function FiltersBar({
           <Select.Item value={ALL_CONNECTORS}>All sources</Select.Item>
           {connectors.map((c) => (
             <Select.Item key={c} value={c}>
-              {c}
+              {formatConnectorLabel(c)}
             </Select.Item>
           ))}
         </Select.Content>

@@ -79,7 +79,6 @@ export default function PainPointsPage() {
   return (
     <Flex direction="column">
       <PortalHero
-        eyebrow="Friction signal"
         title="Pain points"
         subtitle="Problems customers expressed, deduped into taxonomy topics with confidence."
       />
@@ -100,13 +99,10 @@ export default function PainPointsPage() {
       <FiltersBar
         query={query}
         onQueryChange={resetAnd(setQuery)}
-        minArr=""
-        onMinArrChange={() => undefined}
         connector={connector}
         onConnectorChange={resetAnd(setConnector)}
         connectors={connectors ?? []}
         searchPlaceholder="Search pain point…"
-        hideMinArr
       />
 
       <SurfacePanel
