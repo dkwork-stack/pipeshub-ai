@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { Box, Flex, Text, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CooperLogo } from './cooper-logo';
 import { portal } from './theme';
 
 const NAV = [
@@ -60,19 +61,7 @@ function NavRail() {
             minWidth: 0,
           }}
         >
-          <Box
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              flexShrink: 0,
-              display: 'grid',
-              placeItems: 'center',
-              background: portal.brand.gradient,
-            }}
-          >
-            <MaterialIcon name={portal.brand.icon} size={19} color="white" />
-          </Box>
+          <CooperLogo size={36} />
           {expanded ? (
             <Text
               size="3"
@@ -106,7 +95,7 @@ function NavRail() {
                   borderRadius: 10,
                   padding: expanded ? '0 14px' : '0',
                   textDecoration: 'none',
-                  backgroundColor: active ? portal.colors.blue : 'transparent',
+                  backgroundColor: active ? portal.sidebar.activeBg : 'transparent',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                 }}

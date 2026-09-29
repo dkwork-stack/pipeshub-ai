@@ -1,6 +1,6 @@
 'use client';
 
-import { Flex, IconButton, Select, Text, TextField } from '@radix-ui/themes';
+import { Box, Flex, IconButton, Select, Text, TextField, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { PageMeta } from '../types';
 import { formatConnectorLabel } from './connector-display';
@@ -26,17 +26,22 @@ export function FiltersBar({
 }) {
   return (
     <Flex gap="3" wrap="wrap" align="center" mb="4">
-      <TextField.Root
-        size="2"
-        placeholder={searchPlaceholder}
-        value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
-        style={{ minWidth: 260, flex: '1 1 260px', ...portal.input }}
-      >
-        <TextField.Slot>
-          <MaterialIcon name="search" size={16} color={portal.muted} />
-        </TextField.Slot>
-      </TextField.Root>
+      <Tooltip content={searchPlaceholder}>
+        <Box style={{ minWidth: 260, flex: '1 1 260px' }}>
+          <TextField.Root
+            size="2"
+            placeholder={searchPlaceholder}
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            aria-label={searchPlaceholder}
+            style={{ width: '100%', ...portal.input }}
+          >
+            <TextField.Slot>
+              <MaterialIcon name="search" size={16} color={portal.muted} />
+            </TextField.Slot>
+          </TextField.Root>
+        </Box>
+      </Tooltip>
       <Select.Root
         size="2"
         value={connector || ALL_CONNECTORS}

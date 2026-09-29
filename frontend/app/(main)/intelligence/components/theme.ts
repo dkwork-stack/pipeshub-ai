@@ -36,10 +36,11 @@ export const portal = {
   sidebar: {
     collapsedWidth: 72,
     expandedWidth: 244,
-    backgroundColor: '#eff6ff',
-    border: '#dbeafe',
-    text: '#1e3a8a',
-    muted: '#3b82f6',
+    backgroundColor: '#2563eb',
+    border: '#1d4ed8',
+    text: '#ffffff',
+    muted: 'rgba(255, 255, 255, 0.85)',
+    activeBg: 'rgba(255, 255, 255, 0.22)',
   } as const,
   /** Inline style overrides — Radix's built-in `color="blue"` scale doesn't
    *  match the mock's exact hex, so buttons apply these directly. */
@@ -66,8 +67,7 @@ export const portal = {
   brand: {
     name: 'Cooper',
     tagline: '',
-    icon: 'auto_awesome',
-    gradient: 'linear-gradient(145deg, #2563eb, #1d4ed8)',
+    logoSrc: '/icons/cooper-logo.png',
   } as const,
   /**
    * Pastel icon-badge colors for stat cards (StatStrip). Every value shown

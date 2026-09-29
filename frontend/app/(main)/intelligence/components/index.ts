@@ -1,5 +1,6 @@
 export { PortalShell } from './shell';
 export { PortalHero } from './hero';
+export { CooperLogo } from './cooper-logo';
 export { portal } from './theme';
 export { StatStrip } from './stats';
 export type { StatItem, StatColor } from './stats';
@@ -29,4 +30,3 @@ export type { SortDirection } from './use-client-sort';
 export { exportRowsToCsv } from './export-csv';
 export type { CsvColumn } from './export-csv';
 export { ExportButton } from './export-button';
-export { TopAsksPills } from './top-asks-pills';

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Flex, Table, Text } from '@radix-ui/themes';
+import { Badge, Flex, Table, Text } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import type { CustomerSummary } from '../types';
 import { useCustomers, useSourceConnectors } from '../api';
@@ -20,7 +20,6 @@ import {
   RowMenu,
   SortableHeader,
   SurfacePanel,
-  TopAsksPills,
   exportRowsToCsv,
   formatCount,
   formatDate,
@@ -162,7 +161,29 @@ export default function CustomersPage() {
                   <Table.Cell align="right">{formatCount(c.feature_gap_count)}</Table.Cell>
                   <Table.Cell align="right">{formatCount(c.mention_count)}</Table.Cell>
                   <Table.Cell>
-                    <TopAsksPills insights={c.top_insights} />
+                    <Flex direction="column" gap="1" align="start">
+                      {c.top_insights.length === 0 ? (
+                        <Text size="1" style={{ color: portal.muted }}>
+                          —
+                        </Text>
+                      ) : (
+                        c.top_insights.map((insight) => (
+                          <Link
+                            key={insight.feature_name}
+                            href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(insight.feature_name)}`}
+                            style={{ textDecoration: 'none' }}
+                          >
+                            <Badge
+                              variant="soft"
+                              size="1"
+                              style={{ backgroundColor: portal.colors.blueSoftBg, color: portal.colors.blue }}
+                            >
+                              {insight.feature_name} · {insight.mention_count}
+                            </Badge>
+                          </Link>
+                        ))
+                      )}
+                    </Flex>
                   </Table.Cell>
                   <Table.Cell>
                     <RowMenu detailHref={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`} />

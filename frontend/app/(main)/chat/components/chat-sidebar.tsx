@@ -7,6 +7,7 @@ import { useChatStore } from '../store';
 import { Conversation } from '../types';
 import { Flex, Box, Text, Button, IconButton } from '@radix-ui/themes';
 import { PipesHubIcon } from '@/app/components/ui';
+import { CooperLogo } from '@/app/(main)/intelligence/components/cooper-logo';
 import { useTranslation } from 'react-i18next';
 
 //TODO: Refactor to separate files
@@ -36,6 +37,8 @@ interface MenuButtonProps {
   isActive?: boolean;
   accent?: boolean;
   rightSlot?: React.ReactNode;
+  /** Optional custom icon node — when set, replaces the MaterialIcon. */
+  iconNode?: React.ReactNode;
 }
 
 const MenuButton = ({
@@ -45,6 +48,7 @@ const MenuButton = ({
   isActive = false,
   accent = false,
   rightSlot,
+  iconNode,
 }: MenuButtonProps) => (
   <Button
     variant={isActive ? 'soft' : 'ghost'}
@@ -57,7 +61,7 @@ const MenuButton = ({
       ...(isActive && { border: '1px solid var(--slate-3)' }),
     }}
   >
-    <MaterialIcon name={icon} size={16} />
+    {iconNode ?? <MaterialIcon name={icon} size={16} />}
     <span style={{ flex: 1, textAlign: 'left', fontWeight: 400 }}>{label}</span>
     {rightSlot}
   </Button>
@@ -244,7 +248,12 @@ export function ChatSidebar() {
         <MenuButton icon="folder" label={t('nav.collections')} onClick={() => handleNavigation('/knowledge-base')} />
         <MenuButton icon="description" label={t('nav.allRecords')} onClick={() => handleNavigation('/knowledge-base?view=all-records')} />
         <MenuButton icon="memory" label={t('nav.agents')} onClick={() => handleNavigation('/agents')} />
-        <MenuButton icon="lightbulb" label={t('nav.intelligence')} onClick={() => handleNavigation('/intelligence')} />
+        <MenuButton
+          icon="lightbulb"
+          iconNode={<CooperLogo size={16} />}
+          label={t('nav.intelligence')}
+          onClick={() => handleNavigation('/intelligence')}
+        />
       </Flex>
 
       {/* Chat Sections */}
