@@ -64,6 +64,9 @@ import {
 } from './config';
 import { NotificationContainer } from './modules/notification/container/notification.container';
 import { NotificationConsumer } from './modules/notification/service/notification.consumer';
+import { MailConsumer } from './modules/mail/services/mail.consumer';
+import { MailSenderService } from './modules/mail/services/mail.sender.service';
+import { BrokerTopic } from './libs/types/messaging.types';
 import { createNotificationRouter } from './modules/notification/routes/notification.routes';
 import {
   loadAppConfig,
@@ -107,6 +110,7 @@ import { McpServersContainer } from './modules/mcp_servers/container/mcp_servers
 import { createMcpServersRouter } from './modules/mcp_servers/routes/mcp_servers.routes';
 import { ProjectsContainer } from './modules/projects/container/project.container';
 import { createProjectsRouter } from './modules/projects/routes/project.routes';
+import { createArtifactsRouter } from './modules/artifacts/routes/artifacts.routes';
 import { createMCPRouter } from './modules/mcp/routes/mcp.routes';
 // Side-effect import: registers edition-specific Redis providers for this process.
 import './redisProviders';
@@ -319,6 +323,7 @@ export class Application {
       this.desktopProxySocketGateway.initialize(this.server);
 
       this.bootstrapNotificationBrokerConsumer();
+      this.bootstrapMailBrokerConsumer();
 
       // Serve static frontend files\
       const publicDir = path.join(__dirname, 'public');
@@ -405,6 +410,12 @@ export class Application {
   }
 
   private configureMiddleware(appConfig: AppConfig): void {
+    // Unset means trust no proxy: req.ip is the socket address.
+    if (appConfig.trustProxy.warning) {
+      this.logger.warn(appConfig.trustProxy.warning);
+    }
+    this.app.set('trust proxy', appConfig.trustProxy.value);
+
     const isStrictMode = process.env.STRICT_MODE === 'true';
     if (isStrictMode) {
       // Security middleware - configure helmet once with all options
@@ -621,6 +632,11 @@ export class Application {
     );
 
     this.app.use(
+      '/api/v1/artifacts',
+      createArtifactsRouter(this.knowledgeBaseContainer),
+    );
+
+    this.app.use(
       '/api/v1/notifications',
       createNotificationRouter(this.entityManagerContainer),
     );
@@ -761,6 +777,27 @@ export class Application {
     })();
   }
 
+  private bootstrapMailBrokerConsumer(): void {
+    void (async () => {
+      try {
+        const consumer =
+          this.mailServiceContainer.get<MailConsumer>(MailConsumer);
+        await consumer.start();
+        // From the start: an invite can be queued before a brand-new group
+        // exists, and starting at the tail would skip it. An existing group
+        // resumes from its own offsets, so delivered mail is not replayed.
+        await consumer.subscribe([BrokerTopic.MAIL_EVENTS], true);
+        await consumer.consume(async () => {
+          /* delivery, retry and failure notification live in MailConsumer */
+        });
+      } catch (error) {
+        this.logger.error('Mail broker consumer failed to start', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  }
+
   async start(): Promise<void> {
     try {
       await new Promise<void>((resolve) => {
@@ -792,6 +829,24 @@ export class Application {
         await notificationConsumer.stop();
       } catch (err) {
         this.logger.warn('NotificationConsumer not available during shutdown', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      try {
+        const mailConsumer =
+          this.mailServiceContainer.get<MailConsumer>(MailConsumer);
+        await mailConsumer.stop();
+      } catch (err) {
+        this.logger.warn('MailConsumer not available during shutdown', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      try {
+        this.mailServiceContainer
+          .get<MailSenderService>(MailSenderService)
+          .close();
+      } catch (err) {
+        this.logger.warn('MailSenderService not available during shutdown', {
           error: err instanceof Error ? err.message : String(err),
         });
       }
