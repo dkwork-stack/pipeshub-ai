@@ -204,8 +204,10 @@ class ContainerUtils:
         blob_storage: BlobStorage,
         vector_store: VectorStore,
         graph_provider: IGraphDBProvider,
-        config_service,
+        config_service: ConfigurationService,
         customer_intelligence_provider=None,
+        entity_vector_store: EntityVectorStore | None = None,
+        entity_resolver: EntityResolver | None = None,
     ) -> SinkOrchestrator:
         """Async factory for SinkOrchestrator.
 
@@ -221,11 +223,6 @@ class ContainerUtils:
                 logger.warning(
                     "⚠️ Customer Feature Intelligence unavailable; KB uploads will not be analysed: %s", e
                 )
-        config_service: ConfigurationService,
-        entity_vector_store: EntityVectorStore | None = None,
-        entity_resolver: EntityResolver | None = None,
-    ) -> SinkOrchestrator:
-        """Async factory for SinkOrchestrator"""
         orchestrator = SinkOrchestrator(
             graphdb=graphdb,
             blob_storage=blob_storage,

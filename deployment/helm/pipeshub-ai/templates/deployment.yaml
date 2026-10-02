@@ -210,7 +210,6 @@ spec:
                   name: {{ include "pipeshub-ai.arangoSecretName" . }}
                   key: arango-password
             {{- end }}
-<<<<<<< HEAD
             {{- if .Values.mysqlIntelligence.enabled }}
             # Customer Feature Intelligence store config
             - name: INTELLIGENCE_STORE_TYPE
@@ -228,11 +227,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "pipeshub-ai.mysqlIntelligenceSecretName" . }}
                   key: mysql-intelligence-password
-=======
+            {{- end }}
             {{- if and .Values.arango.enabled (not .Values.neo4j.enabled) }}
             - name: DATA_STORE
               value: "arangodb"
->>>>>>> e653aaae510bc92948cbd66f03b9b5d83e85f69b
             {{- end }}
             {{- if .Values.neo4j.enabled }}
             # Neo4j config (app uses Neo4j as graph DB when DATA_STORE=neo4j)

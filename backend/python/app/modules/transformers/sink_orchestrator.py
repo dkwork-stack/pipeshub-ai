@@ -223,7 +223,8 @@ class SinkOrchestrator(Transformer):
             await self._update_indexing_status(ctx)
             # await self.graphdb.apply(ctx)
             await self._save_reconciliation_metadata(ctx)
-<<<<<<< HEAD
+            await self._sync_record_name_entity(ctx)
+            await self._sync_record_group_entity(ctx)
             await self._feed_customer_intelligence(ctx)
 
     async def _feed_customer_intelligence(self, ctx: TransformContext) -> None:
@@ -244,9 +245,7 @@ class SinkOrchestrator(Transformer):
                 "⚠️ Customer intelligence ingestion failed for upload %s (record remains indexed)",
                 record.id,
                 exc_info=True,
-=======
-            await self._sync_record_name_entity(ctx)
-            await self._sync_record_group_entity(ctx)
+            )
 
     async def _sync_record_group_entity(self, ctx: TransformContext) -> None:
         """Sync the record's RecordGroup (e.g. Jira project, Drive folder) into
@@ -442,7 +441,6 @@ class SinkOrchestrator(Transformer):
                 "Entity vector sync failed for deduplicated record %s (non-fatal): %s",
                 record_key,
                 exc,
->>>>>>> acb23d6cbddb113037c2ca7202064668fefd6ce2
             )
 
     # A record with a handful of images is cheaper to describe outright than

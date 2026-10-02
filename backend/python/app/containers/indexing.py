@@ -114,6 +114,8 @@ class IndexingAppContainer(BaseAppContainer):
         logger=logger,
         intelligence_store=intelligence_store,
         extraction_client=extraction_client,
+    )
+
     entity_vector_store = providers.Resource(
         container_utils.create_entity_vector_store,
         logger=logger,
@@ -205,7 +207,19 @@ async def initialize_container(container: IndexingAppContainer) -> bool:
         container._graph_provider = graph_provider
         logger.info("✅ Graph Database Provider initialized and connected")
 
-<<<<<<< HEAD
+        # Idempotent, and not only the connector service's job: this service
+        # writes taxonomy nodes and alias nodes whose uniqueness constraints
+        # and indexes must exist before the first write, whichever service
+        # starts first after an upgrade. Not fatal: the connector service runs
+        # the same bootstrap.
+        if await graph_provider.ensure_schema():
+            logger.info("✅ Schema ensured")
+        else:
+            logger.warning(
+                "⚠️ Graph schema bootstrap failed; taxonomy and alias constraints "
+                "may be missing until a service that runs it starts successfully"
+            )
+
         # Customer Feature Intelligence store — additive to the existing graph/vector
         # pipeline (see AGENTS.md pluggable-store table), so a MySQL outage here must
         # not block core document indexing: log and continue, the /api/v1/intelligence/*
@@ -219,19 +233,6 @@ async def initialize_container(container: IndexingAppContainer) -> bool:
         except Exception as e:
             logger.warning(
                 f"⚠️ Customer Feature Intelligence store unavailable, continuing without it: {e}"
-=======
-        # Idempotent, and not only the connector service's job: this service
-        # writes taxonomy nodes and alias nodes whose uniqueness constraints
-        # and indexes must exist before the first write, whichever service
-        # starts first after an upgrade. Not fatal: the connector service runs
-        # the same bootstrap.
-        if await graph_provider.ensure_schema():
-            logger.info("✅ Schema ensured")
-        else:
-            logger.warning(
-                "⚠️ Graph schema bootstrap failed; taxonomy and alias constraints "
-                "may be missing until a service that runs it starts successfully"
->>>>>>> acb23d6cbddb113037c2ca7202064668fefd6ce2
             )
 
         await Health.system_health_check(container)
