@@ -83,13 +83,13 @@ function NavRail() {
         <Text
           size="1"
           weight="bold"
-          px="4"
-          mb="1"
           style={{
             color: 'rgba(255,255,255,0.55)',
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
             whiteSpace: 'nowrap',
+            padding: '0 16px',
+            marginBottom: 4,
           }}
         >
           Explore
