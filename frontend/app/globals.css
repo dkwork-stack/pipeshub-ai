@@ -473,6 +473,80 @@ summary {
 .intelligence-shell .rt-TableRowHeaderCell .rt-Text {
   color: inherit;
 }
+/* Force list + evidence filter controls to the same 44px height. */
+.intelligence-filters .rt-TextFieldRoot,
+.intelligence-filters .rt-SelectTrigger {
+  height: 44px !important;
+  min-height: 44px !important;
+  box-sizing: border-box;
+}
+/* Select / dropdown menus portal to <body> — while Cooper is open, force
+   Cooper white/blue chrome instead of the app olive gray theme. */
+html[data-cooper-portal='true'] .rt-SelectContent,
+html[data-cooper-portal='true'] .rt-DropdownMenuContent,
+.intelligence-select-content {
+  --color-panel-solid: #ffffff;
+  --gray-1: #ffffff;
+  --gray-2: #ffffff;
+  --gray-3: #f8fafc;
+  --gray-a3: rgba(23, 32, 51, 0.04);
+  --accent-a3: #eff6ff;
+  --accent-a4: #dbeafe;
+  --accent-9: #2563eb;
+  --accent-11: #2563eb;
+  --accent-12: #1d4ed8;
+  background-color: #ffffff !important;
+  color: #172033 !important;
+  border: 1px solid #e8edf5 !important;
+  box-shadow: 0 8px 24px rgba(23, 32, 51, 0.12) !important;
+  border-radius: 10px !important;
+}
+html[data-cooper-portal='true'] .rt-SelectItem,
+html[data-cooper-portal='true'] .rt-DropdownMenuItem,
+.intelligence-select-content .rt-SelectItem {
+  color: #172033 !important;
+  border-radius: 6px !important;
+}
+html[data-cooper-portal='true'] .rt-SelectItem[data-highlighted],
+html[data-cooper-portal='true'] .rt-SelectItem:hover,
+html[data-cooper-portal='true'] .rt-DropdownMenuItem[data-highlighted],
+html[data-cooper-portal='true'] .rt-DropdownMenuItem:hover,
+.intelligence-select-content .rt-SelectItem[data-highlighted],
+.intelligence-select-content .rt-SelectItem:hover {
+  background-color: #eff6ff !important;
+  color: #2563eb !important;
+}
+html[data-cooper-portal='true'] .rt-SelectItem[data-state='checked'],
+.intelligence-select-content .rt-SelectItem[data-state='checked'] {
+  color: #2563eb !important;
+  font-weight: 600;
+}
+html[data-cooper-portal='true'] .rt-SelectLabel,
+html[data-cooper-portal='true'] .rt-SelectSeparator,
+.intelligence-select-content .rt-SelectLabel,
+.intelligence-select-content .rt-SelectSeparator {
+  color: #667085 !important;
+}
+.intelligence-evidence-table .rt-TableCell,
+.intelligence-evidence-table .rt-TableColumnHeaderCell,
+.intelligence-evidence-table .rt-TableRowHeaderCell {
+  box-shadow: none !important;
+}
+.intelligence-evidence-table.rt-variant-surface,
+.intelligence-evidence-table .rt-TableRootTable {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+/* Customer insight tables: shared column rhythm across Requested features / Pain points. */
+.intelligence-insight-table table {
+  width: 100%;
+  table-layout: fixed;
+}
+.intelligence-insight-table .rt-TableColumnHeaderCell,
+.intelligence-insight-table .rt-TableCell,
+.intelligence-insight-table .rt-TableRowHeaderCell {
+  vertical-align: middle;
+}
 .intelligence-overview-panels {
   display: grid;
   align-items: stretch;

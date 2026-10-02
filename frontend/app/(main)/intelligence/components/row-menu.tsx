@@ -14,7 +14,7 @@ export function RowMenu({ detailHref, label }: { detailHref: string; label?: str
           <MaterialIcon name="more_vert" size={18} color={portal.muted} />
         </IconButton>
       </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
+      <DropdownMenu.Content align="end" className="intelligence-select-content">
         <DropdownMenu.Item asChild>
           <Link href={detailHref}>{label ?? 'View details'}</Link>
         </DropdownMenu.Item>

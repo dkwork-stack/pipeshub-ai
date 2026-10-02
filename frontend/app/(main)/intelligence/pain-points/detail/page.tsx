@@ -10,13 +10,15 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Button, Flex, Select, Table, Text } from '@radix-ui/themes';
+import { Button, Flex, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { usePainPoint, useSourceConnectors } from '../../api';
 import {
+  ColumnHeader,
   ConfidenceBadge,
   EmptyState,
   ErrorState,
+  EvidenceFilters,
   LoadingRows,
   PortalHero,
   SourceConnectorIcon,
@@ -31,14 +33,6 @@ import {
   isNotFoundError,
   portal,
 } from '../../components';
-
-const ALL = '__all__';
-const CONF_OPTIONS = [
-  { value: ALL, label: 'All confidence' },
-  { value: '0.5', label: '≥ 50%' },
-  { value: '0.7', label: '≥ 70%' },
-  { value: '0.9', label: '≥ 90%' },
-] as const;
 
 function PainPointDetailContent() {
   const searchParams = useSearchParams();
@@ -56,7 +50,7 @@ function PainPointDetailContent() {
     return (
       <EmptyState
         icon="search_off"
-        title="Missing pain point name"
+        title="Missing pain point"
         description="Open a pain point from the list to see its detail."
       />
     );
@@ -106,12 +100,12 @@ function PainPointDetailContent() {
             {data.affected_customers.length === 0 ? (
               <EmptyState icon="group" title="No customers" />
             ) : (
-              <Table.Root size="1">
+              <Table.Root size="2" style={{ width: '100%' }}>
                 <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeaderCell>Customer</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">ARR</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
+                  <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                    <ColumnHeader>Customer</ColumnHeader>
+                    <ColumnHeader align="right">ARR</ColumnHeader>
+                    <ColumnHeader align="right">Mentions</ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -136,45 +130,25 @@ function PainPointDetailContent() {
           <SurfacePanel
             title="Evidence"
             action={
-              <Flex gap="2">
-                <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                  <Select.Trigger style={{ minWidth: 150, ...portal.input }} />
-                  <Select.Content>
-                    <Select.Item value={ALL}>All sources</Select.Item>
-                    {(connectors ?? []).map((c) => (
-                      <Select.Item key={c} value={c}>
-                        {formatConnectorLabel(c)}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-                <Select.Root
-                  size="1"
-                  value={minConfidence || ALL}
-                  onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
-                >
-                  <Select.Trigger style={{ minWidth: 130, ...portal.input }} />
-                  <Select.Content>
-                    {CONF_OPTIONS.map((o) => (
-                      <Select.Item key={o.value} value={o.value}>
-                        {o.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              </Flex>
+              <EvidenceFilters
+                connector={connector}
+                onConnectorChange={setConnector}
+                connectors={connectors ?? []}
+                minConfidence={minConfidence}
+                onMinConfidenceChange={setMinConfidence}
+              />
             }
           >
             {data.mentions.length === 0 ? (
               <EmptyState icon="format_quote" title="No evidence yet" />
             ) : (
-              <Table.Root variant="surface" size="1">
+              <Table.Root className="intelligence-evidence-table" size="2" style={{ width: '100%' }}>
                 <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeaderCell>Evidence</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Source</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Date</Table.ColumnHeaderCell>
+                  <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                    <ColumnHeader>Evidence</ColumnHeader>
+                    <ColumnHeader>Source</ColumnHeader>
+                    <ColumnHeader align="right">Confidence</ColumnHeader>
+                    <ColumnHeader>Date</ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>

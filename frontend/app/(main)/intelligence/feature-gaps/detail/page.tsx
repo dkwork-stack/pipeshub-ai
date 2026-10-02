@@ -10,34 +10,25 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Button, Flex, Select, Table, Text } from '@radix-ui/themes';
+import { Button, Flex, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useFeatureGap, useSourceConnectors } from '../../api';
 import { MentionsTable } from '../../components/mentions-table';
 import {
   EmptyState,
   ErrorState,
+  EvidenceFilters,
   LoadingRows,
   PortalHero,
   StatStrip,
   SurfacePanel,
   TopicGuidancePanel,
   formatConfidence,
-  formatConnectorLabel,
   formatCount,
   formatMoney,
-  formatScore,
   isNotFoundError,
   portal,
 } from '../../components';
-
-const ALL = '__all__';
-const CONF_OPTIONS = [
-  { value: ALL, label: 'All confidence' },
-  { value: '0.5', label: '≥ 50%' },
-  { value: '0.7', label: '≥ 70%' },
-  { value: '0.9', label: '≥ 90%' },
-] as const;
 
 function FeatureGapDetailContent() {
   const searchParams = useSearchParams();
@@ -96,7 +87,6 @@ function FeatureGapDetailContent() {
               { icon: 'calendar_month', label: 'MRR at stake', value: formatMoney(data.total_mrr_at_stake, true) },
               { icon: 'group', label: 'Customers', value: formatCount(data.customer_count) },
               { icon: 'format_quote', label: 'Mentions', value: formatCount(data.mention_count) },
-              { icon: 'leaderboard', label: 'Priority score', value: formatScore(data.score), hint: 'Revenue × demand' },
               {
                 icon: 'verified',
                 label: 'Max confidence',
@@ -158,38 +148,20 @@ function FeatureGapDetailContent() {
           <SurfacePanel
             title="Evidence"
             action={
-              <Flex gap="2" align="center">
-                {customerId ? (
-                  <Button size="1" variant="soft" onClick={() => setCustomerId('')} style={portal.button.secondary}>
-                    Customer: {customerId} ✕
-                  </Button>
-                ) : null}
-                <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                  <Select.Trigger style={{ minWidth: 150, ...portal.input }} />
-                  <Select.Content>
-                    <Select.Item value={ALL}>All sources</Select.Item>
-                    {(connectors ?? []).map((c) => (
-                      <Select.Item key={c} value={c}>
-                        {formatConnectorLabel(c)}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-                <Select.Root
-                  size="1"
-                  value={minConfidence || ALL}
-                  onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
-                >
-                  <Select.Trigger style={{ minWidth: 130, ...portal.input }} />
-                  <Select.Content>
-                    {CONF_OPTIONS.map((o) => (
-                      <Select.Item key={o.value} value={o.value}>
-                        {o.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              </Flex>
+              <EvidenceFilters
+                connector={connector}
+                onConnectorChange={setConnector}
+                connectors={connectors ?? []}
+                minConfidence={minConfidence}
+                onMinConfidenceChange={setMinConfidence}
+                extra={
+                  customerId ? (
+                    <Button size="2" variant="soft" onClick={() => setCustomerId('')} style={portal.button.secondary}>
+                      Customer: {customerId} ✕
+                    </Button>
+                  ) : null
+                }
+              />
             }
           >
             <MentionsTable mentions={data.mentions} showFeature={false} />

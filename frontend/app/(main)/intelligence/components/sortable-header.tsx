@@ -49,12 +49,17 @@ export function SortableHeader<K extends string>({
 export function ColumnHeader({
   children,
   align,
+  style,
 }: {
   children: React.ReactNode;
   align?: 'left' | 'right' | 'center';
+  style?: React.CSSProperties;
 }) {
   return (
-    <Table.ColumnHeaderCell align={align} style={{ ...portal.tableHeader, color: portal.colors.tableHeaderText }}>
+    <Table.ColumnHeaderCell
+      align={align}
+      style={{ ...portal.tableHeader, color: portal.colors.tableHeaderText, ...style }}
+    >
       {children}
     </Table.ColumnHeaderCell>
   );

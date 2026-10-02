@@ -13,7 +13,7 @@ export {
   isNotFoundError,
 } from './states';
 export { SourceConnectorIcon, formatConnectorLabel } from './connector-display';
-export { FiltersBar, PaginationBar } from './filters';
+export { FiltersBar, EvidenceFilters, PaginationBar, CONFIDENCE_FILTER_OPTIONS } from './filters';
 export { formatConfidence, formatCount, formatDate, formatMoney, formatScore, computeFeatureGapScore, resolveFeatureGapScore, relativeScore } from './format';
 export { ConfidenceBadge, CONFIDENCE_THRESHOLD } from './confidence-badge';
 export { ScoreBadge } from './score-badge';

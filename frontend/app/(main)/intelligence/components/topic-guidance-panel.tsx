@@ -7,6 +7,14 @@ import type { IntelligenceTopic } from '../types';
 import { EmptyState, ErrorState } from './states';
 import { portal } from './theme';
 
+const filterControlStyle = {
+  ...portal.input,
+  height: portal.control.height,
+  minHeight: portal.control.height,
+  display: 'inline-flex',
+  alignItems: 'center',
+} as const;
+
 export function TopicGuidancePanel({
   kind,
   canonicalName,
@@ -83,33 +91,74 @@ export function TopicGuidancePanel({
         with <code>exclude:</code> or <code>ignore:</code> drop matching items after extraction.
       </Text>
       <TextArea
+        size="3"
         rows={5}
         value={guidance}
         onChange={(e) => setGuidance(e.target.value)}
         placeholder={'Include Okta / SAML SSO.\nexclude: generic login bugs'}
-        style={portal.input}
+        style={portal.textarea}
       />
-      <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">
+      <Flex direction="column" gap="1" className="intelligence-filters">
+        <Text size="2" weight="medium" style={{ color: portal.strong }}>
           Aliases (comma-separated)
         </Text>
         <TextField.Root
+          size="3"
           value={aliasesText}
           onChange={(e) => setAliasesText(e.target.value)}
           placeholder="SAML login, single sign-on"
-          style={portal.input}
+          style={{ width: '100%', ...filterControlStyle }}
         />
       </Flex>
-      <Flex align="center" gap="2" wrap="wrap">
-        <Button size="1" onClick={() => void onSave()} disabled={saving} style={portal.button.primary}>
+      <Flex align="center" gap="3" wrap="wrap">
+        <Button
+          size="2"
+          onClick={() => void onSave()}
+          disabled={saving}
+          style={{
+            ...portal.button.primary,
+            minHeight: portal.control.height,
+            paddingLeft: 16,
+            paddingRight: 16,
+          }}
+        >
           Save guidance
         </Button>
-        {others.length > 0 ? (
-          <>
-            <Select.Root size="1" value={mergeTargetId || '__none__'} onValueChange={(v) => setMergeTargetId(v === '__none__' ? '' : v)}>
-              <Select.Trigger placeholder="Merge into…" style={{ minWidth: 180, ...portal.input }} />
-              <Select.Content>
-                <Select.Item value="__none__">Merge into…</Select.Item>
+        {message ? (
+          <Text size="2" style={{ color: portal.muted }}>
+            {message}
+          </Text>
+        ) : null}
+      </Flex>
+
+      {others.length > 0 ? (
+        <Flex
+          direction="column"
+          gap="2"
+          className="intelligence-filters"
+          style={{
+            marginTop: 4,
+            padding: '14px 16px',
+            borderRadius: 10,
+            border: `1px solid ${portal.colors.border}`,
+            backgroundColor: portal.colors.tableHeaderBg,
+          }}
+        >
+          <Text size="2" weight="medium" style={{ color: portal.strong }}>
+            Merge into another topic
+          </Text>
+          <Text size="1" style={{ color: portal.muted }}>
+            Fold this topic into an existing one. Mentions and aliases move to the target.
+          </Text>
+          <Flex align="center" gap="3" wrap="wrap">
+            <Select.Root
+              size="3"
+              value={mergeTargetId || '__none__'}
+              onValueChange={(v) => setMergeTargetId(v === '__none__' ? '' : v)}
+            >
+              <Select.Trigger placeholder="Choose topic…" style={{ minWidth: 220, ...filterControlStyle }} />
+              <Select.Content className="intelligence-select-content" position="popper">
+                <Select.Item value="__none__">Choose topic…</Select.Item>
                 {others.map((t: IntelligenceTopic) => (
                   <Select.Item key={t.id} value={String(t.id)}>
                     {t.canonical_name}
@@ -117,17 +166,23 @@ export function TopicGuidancePanel({
                 ))}
               </Select.Content>
             </Select.Root>
-            <Button size="1" variant="soft" onClick={() => void onMerge()} disabled={saving || !mergeTargetId} style={portal.button.secondary}>
+            <Button
+              size="2"
+              variant="soft"
+              onClick={() => void onMerge()}
+              disabled={saving || !mergeTargetId}
+              style={{
+                ...portal.button.secondary,
+                minHeight: portal.control.height,
+                paddingLeft: 16,
+                paddingRight: 16,
+              }}
+            >
               Merge
             </Button>
-          </>
-        ) : null}
-        {message ? (
-          <Text size="1" style={{ color: portal.muted }}>
-            {message}
-          </Text>
-        ) : null}
-      </Flex>
+          </Flex>
+        </Flex>
+      ) : null}
     </Flex>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Box, Flex, Text, Tooltip } from '@radix-ui/themes';
@@ -79,7 +79,24 @@ function NavRail() {
         </Link>
       </Flex>
 
-      <Flex direction="column" gap="1" px={expanded ? '3' : '2'} py="2" style={{ flex: 1 }}>
+      {expanded ? (
+        <Text
+          size="1"
+          weight="bold"
+          px="4"
+          mb="1"
+          style={{
+            color: 'rgba(255,255,255,0.55)',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Explore
+        </Text>
+      ) : null}
+
+      <Flex direction="column" gap="1" px={expanded ? '3' : '2'} style={{ flexShrink: 0 }}>
         {NAV.map((item) => {
           const active = isActive(pathname, item.href, 'exact' in item ? item.exact : false);
           return (
@@ -91,7 +108,7 @@ function NavRail() {
                   alignItems: 'center',
                   justifyContent: expanded ? 'flex-start' : 'center',
                   gap: 12,
-                  height: 40,
+                  height: 44,
                   borderRadius: 10,
                   padding: expanded ? '0 14px' : '0',
                   textDecoration: 'none',
@@ -102,7 +119,7 @@ function NavRail() {
               >
                 <MaterialIcon
                   name={item.icon}
-                  size={20}
+                  size={22}
                   color={active ? 'white' : portal.sidebar.muted}
                 />
                 {expanded ? (
@@ -119,11 +136,61 @@ function NavRail() {
           );
         })}
       </Flex>
+
+      {/* Bottom utility zone — fills the empty lower rail with a real exit path. */}
+      <Box style={{ flex: 1 }} />
+      <Flex
+        direction="column"
+        gap="2"
+        px={expanded ? '3' : '2'}
+        pb="4"
+        style={{
+          flexShrink: 0,
+          borderTop: '1px solid rgba(255,255,255,0.18)',
+          paddingTop: 12,
+        }}
+      >
+        {expanded && portal.brand.tagline ? (
+          <Text size="1" style={{ color: 'rgba(255,255,255,0.65)', padding: '0 6px', lineHeight: 1.35 }}>
+            {portal.brand.tagline}
+          </Text>
+        ) : null}
+        <Tooltip content="Back to app" side="right">
+          <Link
+            href="/"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: expanded ? 'flex-start' : 'center',
+              gap: 12,
+              height: 40,
+              borderRadius: 10,
+              padding: expanded ? '0 14px' : '0',
+              textDecoration: 'none',
+              backgroundColor: 'rgba(255,255,255,0.12)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+            }}
+          >
+            <MaterialIcon name="arrow_back" size={20} color="white" />
+            {expanded ? (
+              <Text size="2" weight="medium" style={{ color: 'white' }}>
+                Back to app
+              </Text>
+            ) : null}
+          </Link>
+        </Tooltip>
+      </Flex>
     </Flex>
   );
 }
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    document.documentElement.setAttribute('data-cooper-portal', 'true');
+    return () => document.documentElement.removeAttribute('data-cooper-portal');
+  }, []);
+
   return (
     <Flex
       className="intelligence-shell"

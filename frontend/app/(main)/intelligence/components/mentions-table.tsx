@@ -7,6 +7,7 @@ import type { Mention } from '../types';
 import { ConfidenceBadge } from './confidence-badge';
 import { formatConnectorLabel, SourceConnectorIcon } from './connector-display';
 import { formatDate } from './format';
+import { ColumnHeader } from './sortable-header';
 import { EmptyState } from './states';
 import { portal } from './theme';
 
@@ -30,16 +31,16 @@ export function MentionsTable({
   }
 
   return (
-    <Table.Root variant="surface" size="1">
+    <Table.Root className="intelligence-evidence-table" size="2" style={{ width: '100%' }}>
       <Table.Header>
-        <Table.Row>
-          {showFeature ? <Table.ColumnHeaderCell>Feature</Table.ColumnHeaderCell> : null}
-          {showCustomer ? <Table.ColumnHeaderCell>Customer</Table.ColumnHeaderCell> : null}
-          <Table.ColumnHeaderCell>Evidence</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell>Source</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell>Date</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell>Citation</Table.ColumnHeaderCell>
+        <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+          {showFeature ? <ColumnHeader>Feature</ColumnHeader> : null}
+          {showCustomer ? <ColumnHeader>Customer</ColumnHeader> : null}
+          <ColumnHeader>Evidence</ColumnHeader>
+          <ColumnHeader>Source</ColumnHeader>
+          <ColumnHeader align="right">Confidence</ColumnHeader>
+          <ColumnHeader>Date</ColumnHeader>
+          <ColumnHeader>Citation</ColumnHeader>
         </Table.Row>
       </Table.Header>
       <Table.Body>
@@ -71,15 +72,7 @@ export function MentionsTable({
                   </Text>
                 ) : null}
                 {m.excerpt ? (
-                  <Text
-                    size="1"
-                    style={{
-                      color: portal.muted,
-                      fontStyle: 'italic',
-                      borderLeft: `2px solid ${portal.colors.border}`,
-                      paddingLeft: 'var(--space-2)',
-                    }}
-                  >
+                  <Text size="1" style={{ color: portal.muted, fontStyle: 'italic' }}>
                     “{m.excerpt}”
                   </Text>
                 ) : null}
@@ -92,6 +85,8 @@ export function MentionsTable({
                   gap="1"
                   style={{
                     ...portal.input,
+                    height: 'auto',
+                    minHeight: 0,
                     borderRadius: 999,
                     padding: '2px 8px',
                     width: 'fit-content',

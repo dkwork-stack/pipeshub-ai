@@ -59,6 +59,20 @@ export const portal = {
     backgroundColor: '#ffffff',
     boxShadow: 'inset 0 0 0 1px #e8edf5',
     color: '#172033',
+    height: 44,
+    minHeight: 44,
+    boxSizing: 'border-box' as const,
+  } as const,
+  /** TextArea shares the input chrome but must not inherit the fixed 44px control height. */
+  textarea: {
+    backgroundColor: '#ffffff',
+    boxShadow: 'inset 0 0 0 1px #e8edf5',
+    color: '#172033',
+    minHeight: 120,
+    boxSizing: 'border-box' as const,
+  } as const,
+  control: {
+    height: 44,
   } as const,
   muted: '#667085',
   strong: '#172033',
@@ -66,7 +80,7 @@ export const portal = {
   /** Single source of truth for product branding — update here, not per-component. */
   brand: {
     name: 'Cooper',
-    tagline: '',
+    tagline: 'Feature demand & evidence',
     logoSrc: '/icons/cooper-logo.png',
   } as const,
   /**

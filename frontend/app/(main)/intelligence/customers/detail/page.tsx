@@ -10,15 +10,17 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Badge, Button, Flex, Select, Table, Text } from '@radix-ui/themes';
+import { Badge, Button, Flex, Table, Text } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useCustomer, useSourceConnectors } from '../../api';
 import { MentionsTable } from '../../components/mentions-table';
 import {
+  ColumnHeader,
   ConfidenceBadge,
   ConnectorBadges,
   EmptyState,
   ErrorState,
+  EvidenceFilters,
   LoadingRows,
   PortalHero,
   StatStrip,
@@ -31,13 +33,14 @@ import {
   portal,
 } from '../../components';
 
-const ALL = '__all__';
-const CONF_OPTIONS = [
-  { value: ALL, label: 'All confidence' },
-  { value: '0.5', label: '≥ 50%' },
-  { value: '0.7', label: '≥ 70%' },
-  { value: '0.9', label: '≥ 90%' },
-] as const;
+/** Shared column widths so Requested features and Pain points line up. */
+const INSIGHT_COLS = {
+  name: '34%',
+  mentions: '12%',
+  confidence: '14%',
+  date: '18%',
+  sources: '22%',
+} as const;
 
 function CustomerDetailContent() {
   const searchParams = useSearchParams();
@@ -133,14 +136,18 @@ function CustomerDetailContent() {
             {data.insights.length === 0 ? (
               <EmptyState icon="extension" title="No requests recorded" />
             ) : (
-              <Table.Root size="1">
+              <Table.Root className="intelligence-insight-table" size="2" style={{ width: '100%' }}>
                 <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeaderCell>Feature</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Last mentioned</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Sources</Table.ColumnHeaderCell>
+                  <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.name }}>Feature</ColumnHeader>
+                    <ColumnHeader align="right" style={{ width: INSIGHT_COLS.mentions }}>
+                      Mentions
+                    </ColumnHeader>
+                    <ColumnHeader align="right" style={{ width: INSIGHT_COLS.confidence }}>
+                      Confidence
+                    </ColumnHeader>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.date }}>Last mentioned</ColumnHeader>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.sources }}>Sources</ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -157,7 +164,11 @@ function CustomerDetailContent() {
                       <Table.Cell align="right">
                         <ConfidenceBadge value={i.max_confidence} />
                       </Table.Cell>
-                      <Table.Cell>{formatDate(i.last_mentioned_at)}</Table.Cell>
+                      <Table.Cell>
+                        <Text size="2" style={{ whiteSpace: 'nowrap' }}>
+                          {formatDate(i.last_mentioned_at)}
+                        </Text>
+                      </Table.Cell>
                       <Table.Cell>
                         <ConnectorBadges connectors={i.source_connectors} />
                       </Table.Cell>
@@ -172,14 +183,18 @@ function CustomerDetailContent() {
             {(data.pain_point_insights ?? []).length === 0 ? (
               <EmptyState icon="report_problem" title="No pain points recorded" />
             ) : (
-              <Table.Root size="1">
+              <Table.Root className="intelligence-insight-table" size="2" style={{ width: '100%' }}>
                 <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeaderCell>Pain point</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Mentions</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell align="right">Confidence</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Last mentioned</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Sources</Table.ColumnHeaderCell>
+                  <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.name }}>Pain point</ColumnHeader>
+                    <ColumnHeader align="right" style={{ width: INSIGHT_COLS.mentions }}>
+                      Mentions
+                    </ColumnHeader>
+                    <ColumnHeader align="right" style={{ width: INSIGHT_COLS.confidence }}>
+                      Confidence
+                    </ColumnHeader>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.date }}>Last mentioned</ColumnHeader>
+                    <ColumnHeader style={{ width: INSIGHT_COLS.sources }}>Sources</ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -196,7 +211,11 @@ function CustomerDetailContent() {
                       <Table.Cell align="right">
                         <ConfidenceBadge value={i.max_confidence} />
                       </Table.Cell>
-                      <Table.Cell>{formatDate(i.last_mentioned_at)}</Table.Cell>
+                      <Table.Cell>
+                        <Text size="2" style={{ whiteSpace: 'nowrap' }}>
+                          {formatDate(i.last_mentioned_at)}
+                        </Text>
+                      </Table.Cell>
                       <Table.Cell>
                         <ConnectorBadges connectors={i.source_connectors} />
                       </Table.Cell>
@@ -210,33 +229,13 @@ function CustomerDetailContent() {
           <SurfacePanel
             title="Evidence"
             action={
-              <Flex gap="2">
-                <Select.Root size="1" value={connector || ALL} onValueChange={(v) => setConnector(v === ALL ? '' : v)}>
-                  <Select.Trigger style={{ minWidth: 150, ...portal.input }} />
-                  <Select.Content>
-                    <Select.Item value={ALL}>All sources</Select.Item>
-                    {(connectors ?? []).map((c) => (
-                      <Select.Item key={c} value={c}>
-                        {formatConnectorLabel(c)}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-                <Select.Root
-                  size="1"
-                  value={minConfidence || ALL}
-                  onValueChange={(v) => setMinConfidence(v === ALL ? '' : v)}
-                >
-                  <Select.Trigger style={{ minWidth: 130, ...portal.input }} />
-                  <Select.Content>
-                    {CONF_OPTIONS.map((o) => (
-                      <Select.Item key={o.value} value={o.value}>
-                        {o.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              </Flex>
+              <EvidenceFilters
+                connector={connector}
+                onConnectorChange={setConnector}
+                connectors={connectors ?? []}
+                minConfidence={minConfidence}
+                onMinConfidenceChange={setMinConfidence}
+              />
             }
           >
             <MentionsTable mentions={data.mentions} showCustomer={false} />

@@ -20,7 +20,6 @@ import {
   RowIndexBadge,
   RowMenu,
   SortableHeader,
-  StatStrip,
   SurfacePanel,
   exportRowsToCsv,
   formatCount,
@@ -82,19 +81,6 @@ export default function PainPointsPage() {
         title="Pain points"
         subtitle="Problems customers expressed, deduped into taxonomy topics with confidence."
       />
-
-      {data ? (
-        <StatStrip
-          items={[
-            {
-              icon: 'report_problem',
-              color: 'amber',
-              label: 'Total pain points',
-              value: formatCount(data.page.total),
-            },
-          ]}
-        />
-      ) : null}
 
       <FiltersBar
         query={query}
