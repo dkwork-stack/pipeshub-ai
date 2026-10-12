@@ -39,7 +39,7 @@ from app.agent_loop_lib.tools.decorators import tool
 from app.config.constants.service import config_node_constants
 from app.connectors.core.registry.auth_builder import AuthBuilder
 from app.connectors.core.registry.tool_builder import ToolsetBuilder, ToolsetCategory
-from app.modules.agents.qna.chat_state import ChatState
+from app.modules.agents.qna.chat_state import ChatState, remember_record_ids
 
 logger = logging.getLogger(__name__)
 
@@ -1631,8 +1631,8 @@ class StoragePatternMatch:
         """Run a read-only Linux command scoped to the connector's record directory."""
         org_id = self.state.get("org_id", "")
         logger.info(
-            "[storage_pattern_match] org_id=%s connector_id=%s command=%r record_date=%s",
-            org_id, connector_id, command, record_date,
+            "[storage_pattern_match] org_id=%s connector_id=%s command_len=%d record_date=%s",
+            org_id, connector_id, len(command), record_date,
         )
 
         # 1. Validate the command (allowlist + security checks) and the scope.
@@ -1667,8 +1667,8 @@ class StoragePatternMatch:
                 return False, view_err
             cwd = view_dir
         logger.debug(
-            "[storage_pattern_match] cwd=%s effective_command=%r",
-            cwd, effective_command,
+            "[storage_pattern_match] cwd=%s effective_command_len=%d",
+            cwd, len(effective_command),
         )
         try:
             success, output = await _run_subprocess(effective_command, cwd=cwd)
@@ -1689,8 +1689,8 @@ class StoragePatternMatch:
             output = filtered
 
         logger.info(
-            "[storage_pattern_match] result: success=%s output_len=%d output=%r",
-            success, len(output), output[:500],
+            "[storage_pattern_match] result: connector_id=%s success=%s output_len=%d",
+            connector_id, success, len(output),
         )
         return success, output
 
@@ -1755,8 +1755,8 @@ class StoragePatternMatch:
         """Run a command and parse record file paths from output into structured metadata."""
         org_id = self.state.get("org_id", "")
         logger.info(
-            "[storage_pattern_match.find_records] org_id=%s connector_id=%s command=%r max_results=%d",
-            org_id, connector_id, command, max_results,
+            "[storage_pattern_match.find_records] org_id=%s connector_id=%s command_len=%d max_results=%d",
+            org_id, connector_id, len(command), max_results,
         )
 
         max_results = min(max(max_results, 1), _MAX_FIND_RECORDS)
@@ -1781,9 +1781,11 @@ class StoragePatternMatch:
             command, cwd=connector_dir, max_stdout_bytes=max_stdout_bytes,
             max_output_chars=max_output_chars,
         )
+        # Not even at DEBUG: this stdout is from before the permission check,
+        # so it can name records the user may not read.
         logger.info(
-            "[find_records] subprocess result: success=%s output_len=%d output_preview=%r",
-            success, len(output), output[:500],
+            "[find_records] subprocess result: connector_id=%s success=%s output_len=%d",
+            connector_id, success, len(output),
         )
 
         # The command ran over every record in the connector, readable or not,
@@ -1900,6 +1902,12 @@ class StoragePatternMatch:
 
         if not records:
             return True, _NO_ACCESSIBLE_MATCH
+
+        remember_record_ids(
+            self.state,
+            [meta["record_id"] for meta in records],
+            names={meta["record_id"]: meta["record_name"] for meta in records},
+        )
 
         hint_parts = [
             "IMPORTANT: Do NOT blindly fetch all records. Review each record's "

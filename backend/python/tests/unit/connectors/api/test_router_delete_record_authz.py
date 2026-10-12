@@ -43,7 +43,9 @@ def _provider(
         **kind,
     }
 
-    async def get_document(key: str, collection: str, transaction: str | None = None) -> dict | None:
+    async def get_document(
+        key: str, collection: str, transaction: str | None = None, *, raise_on_error: bool = False
+    ) -> dict | None:
         return dict(record) if collection == CollectionNames.RECORDS.value else None
 
     provider = Neo4jProvider(MagicMock(), MagicMock())
@@ -55,7 +57,7 @@ def _provider(
     provider._get_kb_context_for_record = AsyncMock(return_value={"kb_id": "kb-1"})
     provider.get_user_by_user_id = AsyncMock(return_value={"id": "ukey-a"})
     provider.get_user_kb_permission = AsyncMock(return_value=kb_role)
-    provider.delete_records_and_relations = AsyncMock()
+    provider._delete_records_with_their_types = AsyncMock()
     provider._create_deleted_record_event_payload = AsyncMock(
         return_value={"recordId": RECORD_ID, "virtualRecordId": "vr-1"}
     )
@@ -63,7 +65,7 @@ def _provider(
 
 
 def _assert_untouched(provider: Neo4jProvider, kafka: AsyncMock) -> None:
-    provider.delete_records_and_relations.assert_not_awaited()
+    provider._delete_records_with_their_types.assert_not_awaited()
     kafka.publish_event.assert_not_awaited()
 
 
@@ -149,7 +151,7 @@ async def test_same_org_delete_removes_record_and_publishes_vector_cleanup(kind:
     result = await delete_record(RECORD_ID, _request(org_id=ORG_A), provider, kafka)
 
     assert result["success"] is True
-    provider.delete_records_and_relations.assert_awaited_once()
+    provider._delete_records_with_their_types.assert_awaited_once()
     kafka.publish_event.assert_awaited_once()
     topic, event = kafka.publish_event.await_args.args
     assert topic == "record-events"

@@ -96,7 +96,7 @@ describe('StorageController', () => {
       warn: sinon.stub(),
       debug: sinon.stub(),
     }
-    controller = new StorageController(mockConfig, mockLogger, mockKvs)
+    controller = new StorageController(mockConfig, mockLogger, mockKvs, 'test-scoped-secret')
     adapter = makeAdapter()
     initAdapterStub = sinon.stub(controller, 'initializeStorageAdapter').resolves(adapter as any)
   })
@@ -107,9 +107,15 @@ describe('StorageController', () => {
 
   // ── getStorageConfig ────────────────────────────────────────────────
   describe('getStorageConfig', () => {
+    beforeEach(async () => {
+      // The config is cached at module level; start every test without it.
+      await controller.watchStorageType(mockKvs)
+      mockKvs.watchKey.lastCall.args[1]()
+    })
+
     it('should fetch config from CM service on first call', async () => {
       const fakeConfig = { mountName: 'test', baseUrl: 'http://storage' }
-      const cmStub = sinon.stub().resolves({ data: fakeConfig })
+      const cmStub = sinon.stub().resolves({ statusCode: 200, data: fakeConfig })
       const CMCommand = require('../../../../src/libs/commands/configuration_manager/cm.service.command').ConfigurationManagerServiceCommand
       sinon.stub(CMCommand.prototype, 'execute').callsFake(cmStub)
 
@@ -121,18 +127,16 @@ describe('StorageController', () => {
     })
 
     it('should use internal route for service requests', async () => {
-      // Reset module-level storageConfig cache by creating a fresh controller
-      // and clearing the cached value via getStorageConfig's code path
       const fakeConfig = { mountName: 'test-internal' }
       const CMCommand = require('../../../../src/libs/commands/configuration_manager/cm.service.command').ConfigurationManagerServiceCommand
-      const executeStub = sinon.stub(CMCommand.prototype, 'execute').resolves({ data: fakeConfig })
+      const executeStub = sinon.stub(CMCommand.prototype, 'execute').resolves({ statusCode: 200, data: fakeConfig })
 
       mockKvs.get.resolves(JSON.stringify({ cm: { endpoint: 'http://cm:3000' } }))
       const req = { tokenPayload: { orgId: makeOrgId() }, headers: { authorization: 'Bearer svc-token' }, params: {}, query: {}, body: {} }
 
       const result = await controller.getStorageConfig(req as any, mockKvs, mockConfig)
-      // The result may come from cache (previous test set it) — just verify no error
-      expect(result).to.exist
+      expect(result).to.deep.equal(fakeConfig)
+      expect(executeStub.calledOnce).to.equal(true)
     })
   })
 
@@ -498,6 +502,92 @@ describe('StorageController', () => {
     })
   })
 
+  describe('findMissingDocuments', () => {
+    // A query stub that answers like Mongo: only rows matching _id $in, orgId and isDeleted.
+    const stubFind = (rows: any[]) =>
+      sinon.stub(DocumentModel, 'find').callsFake(((filter: any) => {
+        const ids = (filter._id.$in as string[]).map(String)
+        const hits = rows.filter(
+          (r) =>
+            ids.includes(String(r._id)) &&
+            String(r.orgId) === String(filter.orgId) &&
+            r.isDeleted === filter.isDeleted,
+        )
+        return { select: () => ({ lean: () => ({ exec: async () => hits }) }) }
+      }) as any)
+
+    const serviceReq = (orgId: string, documentIds: string[]): any => ({
+      tokenPayload: { orgId },
+      params: {},
+      query: {},
+      body: { documentIds },
+      headers: {},
+    })
+
+    it('answers the ids that do not exist for the org, in one query', async () => {
+      const orgId = makeOrgId()
+      const live = new mongoose.Types.ObjectId()
+      const gone = new mongoose.Types.ObjectId()
+      const findStub = stubFind([{ _id: live, orgId, isDeleted: false }])
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.findMissingDocuments(serviceReq(orgId, [String(live), String(gone)]), res, next)
+
+      expect(next.called).to.be.false
+      expect(findStub.calledOnce).to.be.true
+      expect(res.statusCode).to.equal(HTTP_STATUS.OK)
+      expect(res.body).to.deep.equal({ missing: [String(gone)] })
+    })
+
+    it('counts a deleted document as missing, as download does', async () => {
+      const orgId = makeOrgId()
+      const deleted = new mongoose.Types.ObjectId()
+      stubFind([{ _id: deleted, orgId, isDeleted: true }])
+      const res = makeRes()
+
+      await controller.findMissingDocuments(serviceReq(orgId, [String(deleted)]), res, sinon.stub())
+
+      expect(res.body).to.deep.equal({ missing: [String(deleted)] })
+    })
+
+    it("counts another org's document as missing", async () => {
+      const doc = new mongoose.Types.ObjectId()
+      const findStub = stubFind([{ _id: doc, orgId: makeOrgId(), isDeleted: false }])
+      const orgId = makeOrgId()
+      const res = makeRes()
+
+      await controller.findMissingDocuments(serviceReq(orgId, [String(doc)]), res, sinon.stub())
+
+      expect(String(findStub.firstCall.args[0].orgId)).to.equal(orgId)
+      expect(res.body).to.deep.equal({ missing: [String(doc)] })
+    })
+
+    it('answers a malformed id as missing without querying it', async () => {
+      const orgId = makeOrgId()
+      const findStub = stubFind([])
+      const res = makeRes()
+
+      await controller.findMissingDocuments(serviceReq(orgId, ['not-an-id', 'not-an-id']), res, sinon.stub())
+
+      expect(findStub.called).to.be.false
+      expect(res.body).to.deep.equal({ missing: ['not-an-id'] })
+    })
+
+    it('passes a failed query on rather than answering that nothing is missing', async () => {
+      sinon.stub(DocumentModel, 'find').throws(new Error('mongo down'))
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.findMissingDocuments(
+        serviceReq(makeOrgId(), [String(new mongoose.Types.ObjectId())]), res, next,
+      )
+
+      expect(next.calledOnce).to.be.true
+      expect(res.body).to.equal(null)
+    })
+  })
+
   describe('deleteDocumentById', () => {
     it('should soft-delete a document', async () => {
       const doc = makeDocument()
@@ -858,6 +948,20 @@ describe('StorageController', () => {
       return { doc, req }
     }
 
+    it('should refuse a malformed user id with 400 before writing anything', async () => {
+      const { doc, req } = nextVersionSetup()
+      req.user.userId = 'not-a-user-id'
+      const next = sinon.stub()
+
+      await controller.uploadNextVersionDocument(req, makeRes(), next)
+
+      expect((controller.cloneDocument as sinon.SinonStub).called).to.be.false
+      expect(adapter.uploadDocumentToStorageService.called).to.be.false
+      expect(doc.save.called).to.be.false
+      expect(next.firstCall.args[0].statusCode).to.equal(HTTP_STATUS.BAD_REQUEST)
+      expect(next.firstCall.args[0].message).to.contain("The user id in the storage token isn't valid")
+    })
+
     it('should leave the current file untouched when the new version cannot be written', async () => {
       const { doc, req } = nextVersionSetup()
       adapter.uploadDocumentToStorageService.reset()
@@ -1122,6 +1226,33 @@ describe('StorageController', () => {
       await controller.rollBackToPreviousVersion(req, res, next)
       expect(res.statusCode).to.equal(HTTP_STATUS.OK)
       expect(doc.save.calledOnce).to.be.true
+    })
+
+    it('should refuse a malformed user id with 400 before cloning anything', async () => {
+      const doc = makeDocument({
+        isVersionedFile: true,
+        versionHistory: [
+          { version: 0, s3: { url: 'v0' }, size: 100 },
+          { version: 1, s3: { url: 'v1' }, size: 200 },
+        ],
+        storageVendor: StorageVendor.S3,
+      })
+      sinon.stub(storageUtils, 'getDocumentInfo').resolves({ document: doc })
+      sinon.stub(storageUtils, 'getDocumentRootPath').returns('org/path/doc')
+      sinon.stub(storageUtils, 'normalizeExtension').returns('.pdf')
+      sinon.stub(storageUtils, 'getCurrentFilePath').returns('current/path')
+      sinon.stub(storageUtils, 'getVersionFilePath').returns('version/path')
+      sinon.stub(storageUtils, 'isValidStorageVendor').returns(true)
+      const clone = sinon.stub(controller, 'cloneDocument').resolves({ statusCode: 200, data: 'rolled-url' })
+      const req = makeReq({ userId: 'not-a-user-id', body: { version: 0, note: 'rollback to v0' }, query: {} })
+      const next = sinon.stub()
+
+      await controller.rollBackToPreviousVersion(req, makeRes(), next)
+
+      expect(clone.called).to.be.false
+      expect(doc.save.called).to.be.false
+      expect(next.firstCall.args[0].statusCode).to.equal(HTTP_STATUS.BAD_REQUEST)
+      expect(next.firstCall.args[0].message).to.contain("The user id in the storage token isn't valid")
     })
 
     it('should throw NotFoundError when document not found', async () => {

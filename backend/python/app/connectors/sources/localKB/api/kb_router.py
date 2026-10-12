@@ -17,7 +17,6 @@ from app.connectors.sources.localKB.api.models import (
     CreateFolderResponse,
     CreateKnowledgeBaseResponse,
     CreatePermissionsResponse,
-    CreateRecordsResponse,
     DeleteRecordResponse,
     ErrorResponse,
     FolderContentsResponse,
@@ -25,7 +24,10 @@ from app.connectors.sources.localKB.api.models import (
     ListKnowledgeBaseResponse,
     ListPermissionsResponse,
     ListRecordsResponse,
+    ListTrashResponse,
     RemovePermissionResponse,
+    RestoreRecordResponse,
+    RestoreRecordsResponse,
     SuccessResponse,
     UpdateKnowledgeBaseRequest,
     UpdatePermissionResponse,
@@ -53,11 +55,6 @@ async def get_kb_service(request: Request) -> KnowledgeBaseService:
     graph_provider = request.app.state.graph_provider
     kafka_service = container.kafka_service()
     config_service = container.config_service()
-    entity_vector_store = None
-    try:
-        entity_vector_store = await container.entity_vector_store()
-    except Exception as e:
-        logger.warning(f"Entity vector store unavailable for KB service: {e}")
     request_org_id = request.state.user.get("orgId")
     # Deferred: EventService pulls in every connector module via ConnectorFactory.
     from app.edition_services import EventService
@@ -96,7 +93,6 @@ async def get_kb_service(request: Request) -> KnowledgeBaseService:
         kafka_service=kafka_service,
         processor_for_kb=processor_for_kb,
         config_service=config_service,
-        entity_vector_store=entity_vector_store,
     )
 
 
@@ -112,6 +108,19 @@ HTTP_MAX_STATUS = 600
 HTTP_INTERNAL_SERVER_ERROR = 500
 
 kb_router = APIRouter(prefix="/api/v1/kb", tags=["Knowledge Base"])
+
+
+def _listing_or_error(result: dict[str, Any]) -> dict[str, Any]:
+    """Turn the service's error payload into an error status.
+
+    The error payload is not a valid listing, so returned as-is it fails the
+    response model and the caller gets a bare 500 without the message.
+    """
+    if result.get("success") is False:
+        raise HTTPException(status_code=result.get("code") or 500, detail=result.get("reason"))
+    if result.get("error"):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=result["error"])
+    return result
 
 def _parse_comma_separated_str(value: Optional[str]) -> Optional[List[str]]:
     """Parses a comma-separated string into a list of strings, filtering out empty items."""
@@ -306,7 +315,7 @@ async def update_knowledge_base(
             body = UpdateKnowledgeBaseRequest(**raw_body)
         except ValidationError as ve:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=ve.errors()
             )
         updates = body.model_dump(exclude_none=True)
@@ -402,52 +411,6 @@ async def delete_knowledge_base(
         raise HTTPException(
             status_code=500,
             detail=action_failed("delete this knowledge base")
-        )
-
-@kb_router.post(
-    "/{kb_id}/records",
-    response_model=CreateRecordsResponse,
-    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
-    dependencies=[Depends(require_scopes(OAuthScopes.KB_WRITE))],
-)
-@inject
-async def create_records_in_kb(
-    kb_id: str,
-    request: Request,
-    kb_service: KnowledgeBaseService = Depends(get_kb_service),
-) -> Union[CreateRecordsResponse, Dict[str, Any]]:
-    try:
-        user_id = request.state.user.get("userId")
-        try:
-            body = await request.json()
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid request body"
-            )
-        result = await kb_service.create_records_in_kb(
-            kb_id=kb_id,
-            user_id=user_id,
-            records=body.get("records"),
-            file_records=body.get("fileRecords"),
-        )
-        if not result or result.get("success") is False:
-            error_code = int(result.get("code", HTTP_INTERNAL_SERVER_ERROR))
-            error_reason = result.get("reason", "Unknown error")
-            raise HTTPException(
-                status_code=error_code if HTTP_MIN_STATUS <= error_code < HTTP_MAX_STATUS else HTTP_INTERNAL_SERVER_ERROR,
-                detail=error_reason
-            )
-        return result
-
-    except HTTPException as he:
-        raise he
-
-    except Exception as e:
-        _log.error("create_records_in_kb failed: %s", e, exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=action_failed("add these files")
         )
 
 @kb_router.post(
@@ -562,6 +525,7 @@ async def upload_records_to_kb(
         400: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
     },
     dependencies=[Depends(require_scopes(OAuthScopes.KB_UPLOAD))],
@@ -668,6 +632,7 @@ async def upload_records_to_folder(
         400: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
     },
     dependencies=[Depends(require_scopes(OAuthScopes.KB_UPLOAD))],
@@ -773,7 +738,7 @@ async def create_folder_in_kb_root(
 @kb_router.post(
     "/{kb_id}/folder/{parent_folder_id}/subfolder",
     response_model=CreateFolderResponse,
-    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
     dependencies=[Depends(require_scopes(OAuthScopes.KB_WRITE))],
 )
 @inject
@@ -987,7 +952,7 @@ async def list_kb_records(
 ) -> Dict[str, Any]:
     user_id = request.state.user.get("userId")
     org_id = request.state.user.get("orgId")
-    return await kb_service.list_kb_records(
+    return _listing_or_error(await kb_service.list_kb_records(
         kb_id=kb_id,
         user_id=user_id,
         org_id=org_id,
@@ -1002,7 +967,7 @@ async def list_kb_records(
         date_to=date_to,
         sort_by=sort_by,
         sort_order=sort_order,
-    )
+    ))
 
 @kb_router.get(
     "/{kb_id}/children",
@@ -1336,55 +1301,6 @@ async def list_kb_permissions(
         )
 
 
-@kb_router.post(
-    "/{kb_id}/folder/{folder_id}/records",
-    response_model=CreateRecordsResponse,
-    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
-    dependencies=[Depends(require_scopes(OAuthScopes.KB_WRITE))],
-)
-@inject
-async def create_records_in_folder(
-    kb_id: str,
-    folder_id: str,
-    request: Request,
-    kb_service: KnowledgeBaseService = Depends(get_kb_service),
-) -> Union[CreateRecordsResponse, Dict[str, Any]]:
-    try:
-        try:
-            body = await request.json()
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid request body"
-            )
-        user_id = request.state.user.get("userId")
-        result = await kb_service.create_records_in_folder(
-            kb_id=kb_id,
-            folder_id=folder_id,
-            user_id=user_id,
-            records=body.get("records"),
-            file_records=body.get("fileRecords"),
-        )
-        if not result or result.get("success") is False:
-            error_code = int(result.get("code", HTTP_INTERNAL_SERVER_ERROR))
-            error_reason = result.get("reason", "Unknown error")
-            raise HTTPException(
-                status_code=error_code if HTTP_MIN_STATUS <= error_code < HTTP_MAX_STATUS else HTTP_INTERNAL_SERVER_ERROR,
-                detail=error_reason
-            )
-        return result
-
-    except HTTPException as he:
-        raise he
-
-    except Exception as e:
-        _log.error("create_records_in_folder failed: %s", e, exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=action_failed("add these files")
-        )
-
-
 @kb_router.put(
     "/record/{record_id}",
     response_model=UpdateRecordResponse,
@@ -1636,6 +1552,125 @@ async def delete_record_in_folder(
         )
 
 
+def _raise_refusal(result: dict[str, Any] | None) -> None:
+    error_code = int((result or {}).get("code", HTTP_INTERNAL_SERVER_ERROR))
+    raise HTTPException(
+        status_code=error_code if HTTP_MIN_STATUS <= error_code < HTTP_MAX_STATUS else HTTP_INTERNAL_SERVER_ERROR,
+        detail=(result or {}).get("reason") or action_failed("restore this item"),
+    )
+
+
+@kb_router.post(
+    "/record/{record_id}/restore",
+    response_model=RestoreRecordResponse,
+    response_model_exclude_none=True,
+    responses={
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+    },
+    dependencies=[Depends(require_scopes(OAuthScopes.KB_DELETE))],
+)
+@inject
+async def restore_record(
+    record_id: str,
+    request: Request,
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+) -> RestoreRecordResponse:
+    try:
+        result = await kb_service.restore_record(
+            record_id=record_id,
+            user_id=request.state.user.get("userId"),
+            org_id=request.state.user.get("orgId"),
+        )
+        if not result or result.get("success") is False:
+            _raise_refusal(result)
+        return RestoreRecordResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.error("restore_record failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=action_failed("restore this item")) from e
+
+
+@kb_router.post(
+    "/records/restore",
+    response_model=RestoreRecordsResponse,
+    responses={400: {"model": ErrorResponse}},
+    dependencies=[Depends(require_scopes(OAuthScopes.KB_DELETE))],
+)
+@inject
+async def restore_records(
+    request: Request,
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+) -> RestoreRecordsResponse:
+    try:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        record_ids = body.get("recordIds") if isinstance(body, dict) else None
+        if not isinstance(record_ids, list) or not all(isinstance(i, str) and i for i in record_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Send the items to restore as recordIds, a list of record ids.",
+            )
+        result = await kb_service.restore_records(
+            record_ids=record_ids,
+            user_id=request.state.user.get("userId"),
+            org_id=request.state.user.get("orgId"),
+        )
+        if result.get("code") == status.HTTP_400_BAD_REQUEST:
+            _raise_refusal(result)
+        return RestoreRecordsResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.error("restore_records failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=action_failed("restore these items")) from e
+
+
+@kb_router.get(
+    "/{kb_id}/trash",
+    response_model=ListTrashResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
+    # The same scope as restore: the list is what this caller may restore.
+    dependencies=[Depends(require_scopes(OAuthScopes.KB_DELETE))],
+)
+@inject
+async def list_trash(
+    kb_id: str,
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+) -> ListTrashResponse:
+    try:
+        result = await kb_service.list_trash(
+            kb_id=kb_id,
+            user_id=request.state.user.get("userId"),
+            org_id=request.state.user.get("orgId"),
+            page=page,
+            limit=limit,
+        )
+        if not result or result.get("success") is False:
+            error_code = int((result or {}).get("code", HTTP_INTERNAL_SERVER_ERROR))
+            raise HTTPException(
+                status_code=error_code if HTTP_MIN_STATUS <= error_code < HTTP_MAX_STATUS else HTTP_INTERNAL_SERVER_ERROR,
+                detail=(result or {}).get("reason") or action_failed("load the recently deleted items"),
+            )
+        return ListTrashResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.error("list_trash failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=action_failed("load the recently deleted items")) from e
+
+
 @kb_router.get(
     "/records",
     # response_model=ListAllRecordsResponse
@@ -1670,7 +1705,7 @@ async def list_all_records(
     user_id = request.state.user.get("userId")
     org_id = request.state.user.get("orgId")
 
-    return await kb_service.list_all_records(
+    return _listing_or_error(await kb_service.list_all_records(
         user_id=user_id,
         org_id=org_id,
         page=page,
@@ -1686,7 +1721,7 @@ async def list_all_records(
         sort_by=sort_by,
         sort_order=sort_order,
         source=source,
-    )
+    ))
 
 
 # ========================================================================
@@ -1700,6 +1735,7 @@ async def list_all_records(
         400: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
     },
     dependencies=[Depends(require_scopes(OAuthScopes.KB_WRITE))],

@@ -9,6 +9,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.services.messaging.config import MessageBrokerType
+from tests.support.host_header import POISONED_HOSTS, request_with_host
+
+@pytest.fixture(autouse=True)
+def _no_inherited_worker_healthcheck_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS", raising=False)
+
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +656,32 @@ class TestAuthenticateRequests:
         assert isinstance(result, JSONResponse)
         assert result.status_code == 500
 
+    @pytest.mark.parametrize("host", POISONED_HOSTS)
+    async def test_poisoned_host_header_does_not_skip_auth(self, host):
+        """A Host header naming an excluded path does not replace the request path."""
+        from app.query_main import authenticate_requests
+
+        request = request_with_host("/api/v1/x", host)
+        call_next = AsyncMock()
+
+        with patch("app.query_main.authMiddleware", new_callable=AsyncMock, return_value=request) as auth:
+            await authenticate_requests(request, call_next)
+
+        auth.assert_awaited_once_with(request)
+
+    async def test_health_path_of_a_real_request_skips_auth(self):
+        """The exclusion still applies to a real request for /health."""
+        from app.query_main import authenticate_requests
+
+        request = request_with_host("/health")
+        call_next = AsyncMock()
+
+        with patch("app.query_main.authMiddleware", new_callable=AsyncMock) as auth:
+            await authenticate_requests(request, call_next)
+
+        auth.assert_not_awaited()
+        call_next.assert_awaited_once_with(request)
+
 
 # ===========================================================================
 # health_check
@@ -797,6 +829,7 @@ class TestRun:
             log_level="info",
             reload=False,
             workers=1,
+            timeout_worker_healthcheck=60,
         )
 
     def test_run_defaults(self):
@@ -822,6 +855,7 @@ class TestRun:
             log_level="info",
             reload=True,
             workers=1,
+            timeout_worker_healthcheck=60,
         )
 
 
@@ -858,6 +892,7 @@ class TestRunWorkersWarning:
                 log_level="info",
                 reload=True,
                 workers=1,
+                timeout_worker_healthcheck=60,
             )
 
     def test_falls_back_to_one_worker_when_exec_fails(self) -> None:
@@ -945,7 +980,7 @@ class TestRunWorkersWarning:
         mock_execvp.assert_called_once()
         argv = mock_execvp.call_args[0][1]
         assert argv[1:4] == ["-m", "uvicorn", "app.query_main:app"]
-        assert argv[-2:] == ["--workers", "4"]
+        assert argv[-4:] == ["--workers", "4", "--timeout-worker-healthcheck", "60"]
 
     def test_single_worker_does_not_exec(self) -> None:
         """The default path must stay in-process -- no exec, no behaviour change."""
@@ -1076,3 +1111,29 @@ class TestModuleConstants:
         """redirect_slashes is False on the app."""
         from app.query_main import app
         assert app.router.redirect_slashes is False
+
+
+class TestCorsPolicy:
+    """Browsers reach this service only through the Node API, so it must not grant CORS."""
+
+    def test_no_cors_middleware(self) -> None:
+        from starlette.middleware.cors import CORSMiddleware
+
+        from app.query_main import app
+        assert all(m.cls is not CORSMiddleware for m in app.user_middleware)
+
+    def test_cross_origin_preflight_is_not_granted(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.query_main import app
+        evil = "https://evil.example"
+        response = TestClient(app, raise_server_exceptions=False).options(
+            "/api/v1/chat",
+            headers={
+                "Origin": evil,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert response.headers.get("access-control-allow-origin") is None
+        assert response.headers.get("access-control-allow-credentials") is None

@@ -26,6 +26,7 @@ from app.modules.extraction.feature_intelligence_extraction import (
     FeatureIntelligenceExtractor,
 )
 from app.api.routes.extraction import router as extraction_router
+from app.utils.process_hardening import mark_process_non_dumpable
 
 logger = logging.getLogger("extraction_main")
 
@@ -66,6 +67,7 @@ class _NoOpGraphProvider:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    mark_process_non_dumpable()
     app_container = await _get_initialized_container()
     app.container = app_container  # type: ignore[attr-defined]
 

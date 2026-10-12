@@ -13,6 +13,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.ai_models import (
     DEFAULT_EMBEDDING_MODEL,
+    QUERY_EMBEDDING_ATTEMPT_TIMEOUT_SECONDS,
 )
 
 # from langchain_cohere import CohereEmbeddings
@@ -60,12 +61,15 @@ from app.utils.aimodels import (
     get_default_embedding_model,
     get_embedding_model,
     get_generator_model,
+    is_local_cpu_embedding_provider,
 )
 from app.utils.embedding_retry import await_with_retry
 from app.utils.chat_helpers import (
     GRAPH_BATCH_CHUNK_SIZE,
     get_flattened_results,
     get_record,
+    group_child_results,
+    valid_group_labels,
 )
 from app.utils.image_utils import get_extension_from_mimetype
 
@@ -154,17 +158,11 @@ PERMISSION_CHECK_UNAVAILABLE_MESSAGE = (
 )
 
 
-valid_group_labels = [
-        GroupType.LIST.value,
-        GroupType.ORDERED_LIST.value,
-        GroupType.FORM_AREA.value,
-        GroupType.INLINE.value,
-        GroupType.KEY_VALUE_AREA.value,
-        GroupType.TEXT_SECTION.value,
-        GroupType.CODE.value,
-    ]
-
 class RetrievalService:
+    # Local models may load or download on first use, so their queries get no deadline.
+    # A class default, so an instance built without __init__ (as some tests do) has it too.
+    _cached_embedding_is_local = True
+
     def __init__(
         self,
         logger,
@@ -314,6 +312,7 @@ class RetrievalService:
                 if not embedding_configs:
                     self.logger.info("No embedding config found; using default embedding model")
                     dense_embeddings = await asyncio.to_thread(get_default_embedding_model)
+                    is_local = True
                 else:
                     selected_config = next(
                         (c for c in embedding_configs if c.get("isDefault", False)),
@@ -324,9 +323,13 @@ class RetrievalService:
                     dense_embeddings = await asyncio.to_thread(
                         get_embedding_model, provider, selected_config
                     )
+                    is_local = is_local_cpu_embedding_provider(
+                        provider, (selected_config.get("configuration") or {}).get("endpoint")
+                    )
 
                 self._cached_dense_embeddings = dense_embeddings
                 self._cached_embedding_config_hash = config_hash
+                self._cached_embedding_is_local = is_local
                 return dense_embeddings
         except Exception as e:
             self.logger.error(f"Error getting embedding model: {str(e)}")
@@ -340,11 +343,17 @@ class RetrievalService:
                 config_node_constants.AI_MODELS.value,
                 use_cache=use_cache
             )
-            if ai_models and "embedding" in ai_models and ai_models["embedding"]:
-                for config in ai_models["embedding"]:
-                    # Only one embedding model is supported
-                    if "configuration" in config and "model" in config["configuration"]:
-                        return config["configuration"]["model"]
+            embedding_configs = (ai_models or {}).get("embedding") or []
+            if embedding_configs:
+                # The model that embeds: the default one, else the first, as
+                # get_embedding_model_instance picks it.
+                config = next(
+                    (c for c in embedding_configs if c.get("isDefault", False)),
+                    embedding_configs[0],
+                )
+                model = (config.get("configuration") or {}).get("model")
+                if model:
+                    return model
 
             # Return default model if no embedding config found
             return DEFAULT_EMBEDDING_MODEL
@@ -666,14 +675,18 @@ class RetrievalService:
                             if ext:
                                 result["metadata"]["extension"] = ext
 
+                        # Only files and mails can find a link elsewhere; any other record
+                        # without one (a SQL table when FRONTEND_PUBLIC_URL is unset) is
+                        # still a hit, and dropping it here hid it from search and chat.
                         if not weburl:
                             if record.get("recordType", "") == RecordTypes.FILE.value:
                                 file_record_ids_to_fetch.append(record_id)
                                 result_to_record_map[idx] = (record_id, "file")
-                            elif record.get("recordType", "") == RecordTypes.MAIL.value:
+                                continue
+                            if record.get("recordType", "") == RecordTypes.MAIL.value:
                                 mail_record_ids_to_fetch.append(record_id)
                                 result_to_record_map[idx] = (record_id, "mail")
-                            continue
+                                continue
 
                         if knowledge_search:
                             meta = result.get("metadata")
@@ -859,8 +872,10 @@ class RetrievalService:
                 flattened_results = await get_flattened_results(new_type_results, self.blob_store, org_id, is_multimodal_llm, virtual_record_id_to_record, from_retrieval_service=True)
                 for result in flattened_results:
                     block_type = result.get("block_type")
-                    if block_type == GroupType.TABLE.value or block_type in valid_group_labels:
-                        _, child_results = result.get("content")
+                    child_results = group_child_results(result)
+                    if (
+                        block_type == GroupType.TABLE.value or block_type in valid_group_labels
+                    ) and child_results is not None:
                         for child in child_results:
                             final_search_results.append(child)
                     else:
@@ -913,8 +928,8 @@ class RetrievalService:
                     Status.VECTOR_DB_EMPTY,
                 )
         except ValueError as e:
-            self.logger.error(f"ValueError: {e}")
-            return self._create_empty_response(f"Bad request: {str(e)}", Status.ERROR)
+            self.logger.error("Filtered search failed with a ValueError: %s", e, exc_info=True)
+            return self._create_empty_response("Unexpected server error during search.", Status.ERROR)
         except Exception as e:
             self.logger.error(f"Filtered search failed: {e}\n{traceback.format_exc()}")
             return self._create_empty_response("Unexpected server error during search.", Status.ERROR)
@@ -1426,12 +1441,14 @@ class RetrievalService:
         dense_embeddings = await self.get_embedding_model_instance()
         if not dense_embeddings:
             raise ValueError("No dense embeddings found")
+        # Read before the next await, while it still describes the instance just returned.
+        attempt_timeout = None if self._cached_embedding_is_local else QUERY_EMBEDDING_ATTEMPT_TIMEOUT_SECONDS
 
         sparse_embedder = await self._ensure_sparse_embedder()
 
         dense_tasks = [
             await_with_retry(
-                lambda q=query: dense_embeddings.aembed_query(q),
+                lambda q=query: asyncio.wait_for(dense_embeddings.aembed_query(q), timeout=attempt_timeout),
                 max_retries=_RETRIEVAL_EMBED_MAX_RETRIES,
                 operation="aembed_query",
                 service_name="retrieval",

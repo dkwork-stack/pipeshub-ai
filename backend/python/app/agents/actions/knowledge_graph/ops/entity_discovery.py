@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 _MAX_TOP_K = 25
 _DEFAULT_TOP_K = 10
 _PREVIEW_ENTITY_COUNT = 3
-_MAX_ALIASES_SHOWN = 5
 
 
 def _error(message: str) -> str:
@@ -98,11 +97,21 @@ async def execute_search_entities(
 
     remember_entities(
         state,
-        [{"entityId": h.entity_id, "entityType": h.entity_type, "name": h.name} for h in hits],
+        [
+            {
+                "entityId": h.entity_id, "entityType": h.entity_type, "name": h.name,
+                "filterName": h.graph_filter_name,
+            }
+            for h in hits
+        ],
     )
     shortener = get_record_id_shortener_if_enabled(state)
     results, shown_record_ids = _render_hits(hits, context, shortener)
-    remember_record_ids(state, shown_record_ids)
+    names = {h.entity_id: h.name for h in hits}
+    names.update(
+        (r["_key"], r.get("recordName") or "") for h in hits for r in h.records if r.get("_key")
+    )
+    remember_record_ids(state, shown_record_ids, names=names)
 
     payload = {"status": "success", "results": results}
     if ignored:
@@ -123,12 +132,7 @@ def _render_hits(
             "entityId": hit.entity_id,
             "entityType": hit.entity_type,
             "name": _trunc(hit.name),
-            "score": round(hit.score, 4),
         }
-        if hit.aliases:
-            # Other spellings merged into this entity, so the model can tell
-            # the user's wording apart from the canonical name.
-            item["aliases"] = [_trunc(a) for a in hit.aliases[:_MAX_ALIASES_SHOWN]]
         apps = sorted({
             context.app_names[r["connectorId"]]
             for r in hit.records

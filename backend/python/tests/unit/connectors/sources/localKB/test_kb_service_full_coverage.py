@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.config.constants.arangodb import DeleteSource
+
 from app.connectors.sources.localKB.handlers.kb_service import KnowledgeBaseService
 from app.utils.user_messages import action_failed
 
@@ -112,12 +114,13 @@ class TestCreateKnowledgeBase:
         service.graph_provider.rollback_transaction.assert_called_once_with("txn1")
 
     @pytest.mark.asyncio
-    async def test_exception_before_txn_raises_unbound(self, service):
+    async def test_a_failed_user_lookup_answers_a_plain_500(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(
             side_effect=Exception("unexpected")
         )
-        with pytest.raises(UnboundLocalError):
-            await service.create_knowledge_base("user1", "org1", "KB")
+        result = await service.create_knowledge_base("user1", "org1", "KB")
+        assert result == {"success": False, "code": 500, "reason": action_failed("create this knowledge base")}
+        service.graph_provider.begin_transaction.assert_not_awaited()
 
 
 class TestGetKnowledgeBase:
@@ -459,7 +462,7 @@ class TestCreateNestedFolder:
     @pytest.mark.asyncio
     async def test_success(self, service):
         service.graph_provider._validate_folder_creation = AsyncMock(return_value={"valid": True})
-        service.graph_provider.validate_folder_exists_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
         service.graph_provider.find_folder_by_name_in_parent = AsyncMock(return_value=None)
 
         result = await service.create_nested_folder("kb1", "parent1", "Sub", "user1", "org1")
@@ -477,7 +480,7 @@ class TestCreateNestedFolder:
     @pytest.mark.asyncio
     async def test_parent_not_found(self, service):
         service.graph_provider._validate_folder_creation = AsyncMock(return_value={"valid": True})
-        service.graph_provider.validate_folder_exists_in_kb = AsyncMock(return_value=False)
+        service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=False)
 
         result = await service.create_nested_folder("kb1", "parent1", "Sub", "user1", "org1")
         assert result["success"] is False
@@ -486,7 +489,7 @@ class TestCreateNestedFolder:
     @pytest.mark.asyncio
     async def test_name_conflict(self, service):
         service.graph_provider._validate_folder_creation = AsyncMock(return_value={"valid": True})
-        service.graph_provider.validate_folder_exists_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
         service.graph_provider.find_folder_by_name_in_parent = AsyncMock(return_value={"id": "existing"})
 
         result = await service.create_nested_folder("kb1", "parent1", "Sub", "user1", "org1")
@@ -496,7 +499,7 @@ class TestCreateNestedFolder:
     @pytest.mark.asyncio
     async def test_create_returns_failure(self, service):
         service.graph_provider._validate_folder_creation = AsyncMock(return_value={"valid": True})
-        service.graph_provider.validate_folder_exists_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
         service.graph_provider.find_folder_by_name_in_parent = AsyncMock(return_value=None)
         service.processor_for_kb.return_value.on_new_records = AsyncMock(side_effect=Exception("create failed"))
 
@@ -817,7 +820,9 @@ class TestDeleteRecordsInKb:
 
         result = await service.delete_records_in_kb("kb1", ["r1", "r2"], "user1")
         assert result["success"] is True
-        service.processor_for_kb.return_value.on_records_deleted_cascade.assert_awaited_once_with(["r1", "r2"], "kb1")
+        service.processor_for_kb.return_value.on_records_deleted_cascade.assert_awaited_once_with(
+            ["r1", "r2"], "kb1", delete_source=DeleteSource.USER, deleted_by_user_id="uk1", soft_delete=False
+        )
 
     @pytest.mark.asyncio
     async def test_user_not_found(self, service):
@@ -1979,7 +1984,6 @@ class TestMoveRecord:
         service.graph_provider.get_record_parent_info = AsyncMock(return_value=None)
         service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
         service.graph_provider.is_record_folder = AsyncMock(return_value=True)
-        service.graph_provider.is_record_descendant_of = AsyncMock(return_value=True)
 
         result = await service.move_record("kb1", "rec1", "child_folder", "user1")
         assert result["success"] is False

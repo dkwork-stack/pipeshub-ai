@@ -1010,7 +1010,9 @@ class TestExecuteSearchRecordScopedEntities:
             return_value=EntitySearchScope(virtual_ids=["vr-1"], truncated=True),
         ):
             result = await execute_search(state, "roadmap", entity_ids=["rg1"])
-        assert "only its newest accessible records were searched" in json.loads(result)["message"]
+        message = json.loads(result)["message"]
+        assert "only part of its accessible records were searched" in message
+        assert "newest" not in message
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
@@ -1058,3 +1060,27 @@ class TestExecuteSearchRecordScopedEntities:
         await execute_search(state, "test query")
         _, kwargs = retrieval.search_with_filters.call_args
         assert kwargs["virtual_record_ids_from_tool"] is None
+
+
+class TestQueryTextStaysOutOfLogs:
+    """KG-19: a user's query is content; logs carry its length, not its text."""
+
+    @pytest.mark.asyncio
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_search_logs_no_query_text(self, mock_parse) -> None:
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.return_value = {
+            "status_code": 200, "searchResults": [], "virtual_to_record_map": {},
+        }
+        log = MagicMock()
+        state = {
+            "logger": log, "retrieval_service": retrieval, "graph_provider": AsyncMock(),
+            "config_service": MagicMock(), "org_id": "o1", "user_id": "u1",
+            "filters": {"apps": ["app-1"], "kb": []},
+        }
+        await execute_search(state, "salary of jane doe")
+        logged = " ".join(
+            str(arg) for method in (log.info, log.debug, log.warning, log.error)
+            for call in method.call_args_list for arg in call.args
+        )
+        assert "jane" not in logged

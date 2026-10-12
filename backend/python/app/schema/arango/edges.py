@@ -306,7 +306,9 @@ permissions_schema = {
             "_from": {"type": "string", "minLength": 1},
             "_to": {"type": "string", "minLength": 1},
             "externalPermissionId": {"type": ["string", "null"]},
-            "type": {"type": ["string", "null"], "enum": ["USER", "GROUP", "DOMAIN","TEAM", "ORG", "ROLE"]},
+            # ORGANIZATION: the org's read grant on a service account's chat upload
+            # (utils/record_access.py), kept apart from ORG so it grants nothing else.
+            "type": {"type": ["string", "null"], "enum": ["USER", "GROUP", "DOMAIN", "TEAM", "ORG", "ROLE", "ORGANIZATION"]},
             "role": {
                 "type": "string",
                 "enum": [
@@ -399,6 +401,13 @@ taxonomy_edge_schema = {
             "_to": {"type": "string", "minLength": 1},
             "createdAtTimestamp": {"type": "number"},
             "extractedName": {"type": ["string", "null"]},
+            # Every spelling the record used for the node, extractedName first.
+            "extractedNames": {"type": ["array", "null"], "items": {"type": "string"}},
+            # The node this edge was moved from by a taxonomy merge or
+            # migration (app.modules.entity_resolution.consolidation).
+            "mergedFrom": {"type": ["string", "null"]},
+            # The legacy node a migration moved this edge from.
+            "migratedFrom": {"type": ["string", "null"]},
         },
         "required": ["createdAtTimestamp"],
         "additionalProperties": False,

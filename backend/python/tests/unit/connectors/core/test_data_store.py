@@ -53,11 +53,14 @@ class ConcreteTransactionStore(TransactionStore):
     async def rollback(self):
         self._rolled_back = True
 
-    async def get_record_by_key(self, key):
+    async def get_record_by_key(self, key, *, raise_on_error=False):
         return self._records.get(key)
 
     async def get_record_by_external_id(self, connector_id, external_id):
         return None
+
+    async def take_back_kept_record_group(self, group_id) -> bool:
+        return True
 
     async def get_record_by_external_revision_id(self, connector_id, external_revision_id):
         return None
@@ -200,7 +203,7 @@ class ConcreteTransactionStore(TransactionStore):
     async def get_edges_from_node_with_target_name(self, from_node_id, edge_collection):
         return []
 
-    async def get_edge(self, from_id, from_collection, to_id, to_collection, collection):
+    async def get_edge(self, from_id, from_collection, to_id, to_collection, collection, *, raise_on_error=False):
         return None
 
     async def delete_edge(self, from_id, from_collection, to_id, to_collection, collection):
@@ -246,6 +249,9 @@ class ConcreteTransactionStore(TransactionStore):
         return None
 
     async def batch_create_edges(self, edges, collection):
+        pass
+
+    async def create_edges_if_absent(self, edges: list[dict], collection: str) -> None:
         pass
 
     async def delete_edges_between_collections(self, from_id, from_collection, edge_collection, to_collection):

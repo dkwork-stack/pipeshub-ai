@@ -1,4 +1,19 @@
 import { z } from 'zod';
+import {
+  CONNECTOR_VRID_PAGE_MAX,
+  MAX_SIGNED_URL_TTL_SECONDS,
+  RELOCATE_MAX_MOVES,
+  MAX_MISSING_DOCUMENT_IDS,
+} from '../constants/constants';
+
+const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
+
+// Mongoose casts a malformed id deep inside the query and answers 500, so it is
+// refused here, before any handler runs.
+const documentIdSchema = z.string().regex(OBJECT_ID_REGEX, {
+  message:
+    "The document id in the address isn't valid. Use the 24-character id PipesHub returned when the document was uploaded or created, then try again.",
+});
 
 // Common Schema Components
 export const Headers = z.object({
@@ -7,11 +22,28 @@ export const Headers = z.object({
 
 export const DocumentIdParams = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
   body: z.object({
     fileBuffer: z.any(),
+  }),
+});
+
+// Purges delete for good, so only a well-formed id may reach the query.
+export const PurgeDocumentParams = z.object({
+  params: z.object({
+    documentId: z.string().regex(/^[0-9a-f]{24}$/i, 'Not a document id'),
+  }),
+});
+
+const virtualRecordIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, 'Not a virtual record id');
+
+export const PurgeVirtualRecordParams = z.object({
+  params: z.object({
+    virtualRecordId: virtualRecordIdSchema,
   }),
 });
 
@@ -37,9 +69,58 @@ export const MoveTreeSchema = z.object({
     }),
 });
 
+export const RelocateVirtualRecordsSchema = z.object({
+  headers: Headers,
+  body: z.object({
+    fromConnectorId: z.string().min(1),
+    moves: z
+      .array(
+        z.object({
+          virtualRecordId: virtualRecordIdSchema,
+          // Content envelopes only ever live under records/.
+          newPath: treePath.refine(
+            (p) => p.startsWith('records/'),
+            'newPath must be under records/',
+          ),
+          connectorId: z.string().min(1),
+          recordGroupId: z.string().min(1).optional(),
+        }),
+      )
+      .min(1)
+      .max(RELOCATE_MAX_MOVES),
+  }),
+});
+
+export const ConnectorVirtualRecordsSchema = z.object({
+  params: z.object({
+    connectorId: z.string().min(1),
+  }),
+  query: z.object({
+    after: z.string().regex(OBJECT_ID_REGEX, 'Not a document id').optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(CONNECTOR_VRID_PAGE_MAX)
+      .optional(),
+  }),
+  headers: Headers,
+});
+
+// Ids are not checked for shape: one that is not an ObjectId cannot exist, and is answered missing.
+export const MissingDocumentsSchema = z.object({
+  headers: Headers,
+  body: z.object({
+    documentIds: z
+      .array(z.string().min(1).max(64))
+      .min(1)
+      .max(MAX_MISSING_DOCUMENT_IDS),
+  }),
+});
+
 export const DocumentIdParamsWithVersion = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
   query: z.object({
@@ -52,16 +133,21 @@ export const DocumentIdParamsWithVersion = z.object({
     expirationTimeInSeconds: z.string()
       .optional()
       .transform((val) => (val ? Number(val) : undefined))
-      .refine((num) => num === undefined || num > 0, {
-        message: "expirationTimeInSeconds must be greater than zero",
-      }),
+      .refine(
+        (num) =>
+          num === undefined ||
+          (num > 0 && num <= MAX_SIGNED_URL_TTL_SECONDS),
+        {
+          message: `expirationTimeInSeconds must be between 1 and ${MAX_SIGNED_URL_TTL_SECONDS} (7 days)`,
+        },
+      ),
   }),
 });
 
 export const DirectUploadSchema = z.object({
   query: z.object({}),
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
 });
@@ -93,7 +179,7 @@ export const UploadNewSchema = z.object({
 
 export const UploadNextVersionSchema = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   body: z.object({
     currentVersionNote: z.string().optional(),
@@ -113,7 +199,7 @@ export const GetBufferSchema = z.object({
       .pipe(z.number().min(0).optional()),
   }),
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
 });
