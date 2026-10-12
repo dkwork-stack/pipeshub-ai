@@ -224,8 +224,6 @@ class SinkOrchestrator(Transformer):
             await self._update_indexing_status(ctx)
             # await self.graphdb.apply(ctx)
             await self._save_reconciliation_metadata(ctx)
-            await self._sync_record_name_entity(ctx)
-            await self._sync_record_group_entity(ctx)
             await self._feed_customer_intelligence(ctx)
             await self._sync_record_identity_entities(ctx)
 
