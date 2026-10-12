@@ -101,6 +101,7 @@ class IndexingAppContainer(BaseAppContainer):
 
     extraction_client = providers.Resource(
         container_utils.create_extraction_client,
+        config_service=config_service,
     )
 
     # Customer Feature Intelligence: MySQL-backed store + ingestion service.
@@ -180,18 +181,6 @@ class IndexingAppContainer(BaseAppContainer):
         parsers=parsers,
         document_extractor=document_extractor,
         sink_orchestrator=sink_orchestrator,
-    )
-
-    # HTTP clients for the standalone Parsing and Extraction services.
-    # These are only used when USE_PARSING_SERVICE=true is set in the environment.
-    parsing_client = providers.Resource(
-        container_utils.create_parsing_client,
-        config_service=config_service,
-    )
-
-    extraction_client = providers.Resource(
-        container_utils.create_extraction_client,
-        config_service=config_service,
     )
 
     event_processor = providers.Resource(
