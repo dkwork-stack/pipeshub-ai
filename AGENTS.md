@@ -13,7 +13,7 @@ frontend/                 Next.js dashboard. UI conventions: frontend/CLAUDE.md
 backend/nodejs/apps/     Express — auth, orgs, KB, gateway, MCP, and (in Docker) the built UI
 backend/python/          FastAPI: connectors :8088, indexing :8091, query :8000,
                           docling :8081, embedding :8002, parsing :8092, extraction :8093,
-                          intelligence portal :8094
+                          intelligence portal :8094, intelligence worker :8095
 deployment/               Docker Compose and Helm
 ```
 
@@ -48,7 +48,8 @@ Redis can be KV, vector, and broker at once; that does not make it the graph or 
 - **Embedding** `:8002` (`app.embedding_main`) — local HuggingFace / SentenceTransformer embeddings, OpenAI-compatible `/v1/embeddings`.
 - **Parsing** `:8092` (`app.parsing_main`) — file bytes → `BlocksContainer` JSON.
 - **Extraction** `:8093` (`app.extraction_main`) — `BlocksContainer` → `SemanticMetadata` (LLM classification). The indexing orchestrator calls this; it does not hold its own graph connection.
-- **Intelligence Portal** `:8094` (`app.intelligence_main`) — read-only Customer Feature Intelligence API over the MySQL intelligence store (`IIntelligenceQueryRepository`). Proxied by Node at `/api/v1/intelligence-portal/*` (scope `intelligence:read`); the `/intelligence` UI consumes only that. See [docs/indexing-service.md §8](./docs/indexing-service.md).
+- **Intelligence Portal** `:8094` (`app.intelligence_main`) — Customer Feature Intelligence API over the MySQL intelligence store: reads via `IIntelligenceQueryRepository` (scope `intelligence:read`), audited topic curation and GDPR erasure (scope `intelligence:write`). Proxied by Node at `/api/v1/intelligence-portal/*`; the `/intelligence` UI consumes only that.
+- **Intelligence worker** `:8095` health (`app.intelligence_worker_main`) — consumes signal envelopes from the `intelligence-events` topic and runs the LLM analysis pipeline. Only needed when `INTELLIGENCE_DISPATCH_MODE=broker`. Architecture: [docs/customer-intelligence-architecture.md](./docs/customer-intelligence-architecture.md).
 
 ## Where the UI listens
 

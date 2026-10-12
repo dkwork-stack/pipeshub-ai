@@ -13,7 +13,7 @@ export {
   isNotFoundError,
 } from './states';
 export { SourceConnectorIcon, formatConnectorLabel } from './connector-display';
-export { FiltersBar, EvidenceFilters, PaginationBar, CONFIDENCE_FILTER_OPTIONS } from './filters';
+export { FiltersBar, EvidenceFilters, PaginationBar, SelectFilter, CONFIDENCE_FILTER_OPTIONS } from './filters';
 export { formatConfidence, formatCount, formatDate, formatMoney, formatScore, computeFeatureGapScore, resolveFeatureGapScore, relativeScore } from './format';
 export { ConfidenceBadge, CONFIDENCE_THRESHOLD } from './confidence-badge';
 export { ScoreBadge } from './score-badge';
@@ -30,3 +30,25 @@ export type { SortDirection } from './use-client-sort';
 export { exportRowsToCsv } from './export-csv';
 export type { CsvColumn } from './export-csv';
 export { ExportButton } from './export-button';
+export {
+  ChurnRiskBadge,
+  ImpactLines,
+  INTENT_LABELS,
+  SignalChips,
+  STATUS_OPTIONS,
+  StatusBadge,
+  ToneBadge,
+  UrgencyBadge,
+} from './signal-badges';
+export {
+  MixBar,
+  TrendIndicator,
+  intentSegments,
+  sentimentSegments,
+  toneSegments,
+  urgencySegments,
+} from './trend';
+export type { MixSegment } from './trend';
+export { StatusControl } from './status-control';
+export { EraseCustomerButton } from './erase-customer';
+export { TopicSignals } from './topic-signals';

@@ -3,8 +3,10 @@
 import useSWR from 'swr';
 import { apiClient, axiosFetcher } from '@/lib/api';
 import type {
+  AuditEntry,
   CustomerDetail,
   CustomerSummary,
+  ErasureResult,
   FeatureGap,
   FeatureGapDetail,
   IntelligenceOverview,
@@ -15,16 +17,17 @@ import type {
   PainPoint,
   PainPointDetail,
   SourceConnectorsResponse,
+  TopicStatus,
 } from './types';
 
 export const INTELLIGENCE_API_BASE = '/api/v1/intelligence-portal';
 
-type QueryValue = string | number | undefined;
+type QueryValue = string | number | boolean | undefined;
 
 function buildUrl(path: string, params: Record<string, QueryValue> = {}): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === '') continue;
+    if (value === undefined || value === '' || value === false) continue;
     search.set(key, String(value));
   }
   const qs = search.toString();
@@ -45,6 +48,7 @@ export const intelligenceUrls = {
   customers: (f: ListFilters) => buildUrl('/customers', f),
   customer: (id: string, f: MentionFilters = {}) =>
     buildUrl(`/customers/${encodeURIComponent(id)}`, f),
+  audit: (limit = 25, offset = 0) => buildUrl('/audit', { limit, offset }),
 };
 
 const swrOptions = { revalidateOnFocus: true, keepPreviousData: true } as const;
@@ -100,7 +104,7 @@ export function useTopic(id: number | null) {
 
 export async function updateTopic(
   id: number,
-  body: { guidance?: string | null; aliases?: string[]; canonical_name?: string },
+  body: { guidance?: string | null; aliases?: string[]; canonical_name?: string; status?: TopicStatus },
 ): Promise<IntelligenceTopic> {
   const { data } = await apiClient.patch<IntelligenceTopic>(
     `${INTELLIGENCE_API_BASE}/topics/${id}`,
@@ -127,4 +131,16 @@ export function useCustomer(id: string | null, filters: MentionFilters = {}) {
     axiosFetcher,
     swrOptions,
   );
+}
+
+/** GDPR erasure: removes the customer, its evidence and revenue history (audited server-side). */
+export async function eraseCustomer(id: string): Promise<ErasureResult> {
+  const { data } = await apiClient.delete<ErasureResult>(
+    `${INTELLIGENCE_API_BASE}/customers/${encodeURIComponent(id)}`,
+  );
+  return data;
+}
+
+export function useAuditLog(limit = 25, offset = 0) {
+  return useSWR<Page<AuditEntry>>(intelligenceUrls.audit(limit, offset), axiosFetcher, swrOptions);
 }

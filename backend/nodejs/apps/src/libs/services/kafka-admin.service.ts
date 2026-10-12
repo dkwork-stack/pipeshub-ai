@@ -61,8 +61,12 @@ function partitionsSetExplicitly(): boolean {
 export function buildRequiredTopics(): TopicDefinition[] {
   return Object.values(BrokerTopic).map((topic) => ({
     topic,
+    // Intelligence envelopes are keyed by org, so partitions are what let
+    // several intelligence workers share the load.
     numPartitions:
-      topic === BrokerTopic.RECORD_EVENTS ? configuredPartitions() : 1,
+      topic === BrokerTopic.RECORD_EVENTS || topic === BrokerTopic.INTELLIGENCE_EVENTS
+        ? configuredPartitions()
+        : 1,
     replicationFactor: 1,
     growExisting:
       topic === BrokerTopic.RECORD_EVENTS && partitionsSetExplicitly(),

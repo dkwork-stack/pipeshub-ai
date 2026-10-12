@@ -18,6 +18,10 @@ SERVICES=(
     "Intelligence Portal (Python)|8094|/health"
 )
 
+if [ "${INTELLIGENCE_DISPATCH_MODE:-inline}" = "broker" ]; then
+    SERVICES+=("Intelligence Worker (Python)|8095|/health")
+fi
+
 if [ "${USE_PARSING_SERVICE:-false}" = "true" ]; then
     SERVICES+=(
         "Parsing Service (Python)|8092|/health"

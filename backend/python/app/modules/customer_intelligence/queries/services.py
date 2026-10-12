@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from app.api.schemas.intelligence_portal import (
+    AuditEntryResponse,
     CustomerDetailResponse,
     CustomerResponse,
+    ErasureResponse,
     FeatureGapDetailResponse,
     FeatureGapResponse,
     OverviewResponse,
@@ -23,12 +25,15 @@ from app.api.schemas.intelligence_portal import (
     TopicResponse,
 )
 from app.models.intelligence import (
+    AskIntent,
+    AuditEntry,
     CustomerFilter,
     FeatureGapFilter,
     MentionFilter,
     PainPointFilter,
     TopicGuidanceUpdate,
     TopicKind,
+    TopicStatus,
 )
 from app.modules.customer_intelligence.queries import mappers
 
@@ -86,6 +91,8 @@ class FeatureGapQueryService:
         source_connector: Optional[str] = None,
         external_customer_id: Optional[str] = None,
         min_confidence: Optional[float] = None,
+        status: Optional[TopicStatus] = None,
+        intent: Optional[AskIntent] = None,
         pagination: Pagination = Pagination(),
     ) -> Page[FeatureGapResponse]:
         page = pagination.clamped()
@@ -95,6 +102,8 @@ class FeatureGapQueryService:
             source_connector=_clean(source_connector),
             external_customer_id=_clean(external_customer_id),
             min_confidence=min_confidence,
+            status=status,
+            intent=intent,
         )
         items, total = await self._repo.search_feature_gaps(org_id, filters, limit=page.limit, offset=page.offset)
         return mappers.page_of(
@@ -131,6 +140,7 @@ class PainPointQueryService:
         source_connector: Optional[str] = None,
         external_customer_id: Optional[str] = None,
         min_confidence: Optional[float] = None,
+        status: Optional[TopicStatus] = None,
         pagination: Pagination = Pagination(),
     ) -> Page[PainPointResponse]:
         page = pagination.clamped()
@@ -139,6 +149,7 @@ class PainPointQueryService:
             source_connector=_clean(source_connector),
             external_customer_id=_clean(external_customer_id),
             min_confidence=min_confidence,
+            status=status,
         )
         items, total = await self._repo.search_pain_points(
             org_id, filters, limit=page.limit, offset=page.offset
@@ -169,7 +180,7 @@ class PainPointQueryService:
 
 
 class TopicService:
-    """Read + write taxonomy topics (guidance / aliases / merge)."""
+    """Read + write taxonomy topics (guidance / aliases / status / merge). Writes are audited."""
 
     def __init__(self, store: "IIntelligenceStore") -> None:
         self._store = store
@@ -193,25 +204,69 @@ class TopicService:
         guidance: Optional[str] = None,
         aliases: Optional[list[str]] = None,
         canonical_name: Optional[str] = None,
+        status: Optional[TopicStatus] = None,
         updated_by: Optional[str] = None,
     ) -> Optional[TopicResponse]:
-        topic = await self._store.update_topic_guidance(
-            org_id,
-            topic_id,
-            TopicGuidanceUpdate(
-                guidance=guidance,
-                aliases=aliases,
-                canonical_name=canonical_name,
-                updated_by=updated_by,
-            ),
+        update_payload = TopicGuidanceUpdate(
+            guidance=guidance,
+            aliases=aliases,
+            canonical_name=canonical_name,
+            status=status,
+            updated_by=updated_by,
         )
-        return mappers.topic_response(topic) if topic else None
+        topic = await self._store.update_topic_guidance(org_id, topic_id, update_payload)
+        if topic is None:
+            return None
+        await self._store.record_audit(
+            AuditEntry(
+                org_id=org_id, actor=updated_by, action="topic.update", target_type="topic",
+                target_id=str(topic_id), details=update_payload.model_dump(mode="json", exclude_none=True),
+            )
+        )
+        return mappers.topic_response(topic)
 
     async def merge_topics(
-        self, org_id: str, source_id: int, target_id: int
+        self, org_id: str, source_id: int, target_id: int, *, actor: Optional[str] = None
     ) -> Optional[TopicResponse]:
         topic = await self._store.merge_topics(org_id, source_id, target_id)
-        return mappers.topic_response(topic) if topic else None
+        if topic is None:
+            return None
+        await self._store.record_audit(
+            AuditEntry(
+                org_id=org_id, actor=actor, action="topic.merge", target_type="topic",
+                target_id=str(source_id), details={"into": target_id},
+            )
+        )
+        return mappers.topic_response(topic)
+
+
+class ComplianceService:
+    """GDPR erasure and the audit trail. Every erasure is itself audited."""
+
+    def __init__(self, store: "IIntelligenceStore") -> None:
+        self._store = store
+
+    async def erase_customer(self, org_id: str, external_customer_id: str, *, actor: Optional[str]) -> ErasureResponse:
+        result = await self._store.erase_customer(org_id, external_customer_id)
+        await self._audit(org_id, actor, "erasure.customer", "customer", external_customer_id, result.model_dump())
+        return mappers.erasure_response(result)
+
+    async def erase_source_record(self, org_id: str, record_id: str, *, actor: Optional[str]) -> ErasureResponse:
+        result = await self._store.erase_source_record(org_id, record_id)
+        await self._audit(org_id, actor, "erasure.source_record", "record", record_id, result.model_dump())
+        return mappers.erasure_response(result)
+
+    async def audit_log(self, org_id: str, pagination: Pagination = Pagination()) -> Page[AuditEntryResponse]:
+        page = pagination.clamped()
+        entries, total = await self._store.list_audit(org_id, limit=page.limit, offset=page.offset)
+        return mappers.page_of(
+            [mappers.audit_entry_response(e) for e in entries], total, limit=page.limit, offset=page.offset
+        )
+
+    async def _audit(self, org_id: str, actor: Optional[str], action: str, target_type: str, target_id: str, details: dict) -> None:
+        await self._store.record_audit(
+            AuditEntry(org_id=org_id, actor=actor, action=action, target_type=target_type, target_id=target_id, details=details)
+        )
 
 
 class CustomerQueryService:
@@ -226,10 +281,13 @@ class CustomerQueryService:
         query: Optional[str] = None,
         min_arr: Optional[float] = None,
         source_connector: Optional[str] = None,
+        at_risk: bool = False,
         pagination: Pagination = Pagination(),
     ) -> Page[CustomerResponse]:
         page = pagination.clamped()
-        filters = CustomerFilter(query=_clean(query), min_arr=min_arr, source_connector=_clean(source_connector))
+        filters = CustomerFilter(
+            query=_clean(query), min_arr=min_arr, source_connector=_clean(source_connector), at_risk=at_risk
+        )
         items, total = await self._repo.search_customers(
             org_id, filters, limit=page.limit, offset=page.offset, top_insights=self._top_insights
         )

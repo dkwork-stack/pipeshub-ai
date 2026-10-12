@@ -12,6 +12,8 @@ from typing import Generic, Optional, TypeVar
 
 from pydantic import BaseModel, Field
 
+from app.models.intelligence import TopicStatus
+
 T = TypeVar("T")
 
 
@@ -38,6 +40,46 @@ class RevenueResponse(BaseModel):
     snapshot_at: datetime
 
 
+class TrendResponse(BaseModel):
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    mentions_last_30d: int = 0
+    mentions_prev_30d: int = 0
+    negative_share: float = 0.0
+    high_urgency_count: int = 0
+    churn_risk_count: int = 0
+    competitors: list[str] = Field(default_factory=list)
+    tones: dict[str, int] = Field(default_factory=dict)
+    urgencies: dict[str, int] = Field(default_factory=dict)
+
+
+class EvidenceAttributes(BaseModel):
+    """What the customer said beyond the quote: tone, urgency, impact, provenance."""
+
+    sentiment: str = "Neutral"
+    tone: str = "neutral"
+    urgency: str = "medium"
+    intent: str = "other"
+    speaker_role: str = "customer"
+    product_area: Optional[str] = None
+    business_impact: Optional[str] = None
+    workaround: Optional[str] = None
+    competitor: Optional[str] = None
+    churn_risk: bool = False
+    source_record_id: Optional[str] = None
+    extraction_model: Optional[str] = None
+    prompt_version: Optional[str] = None
+
+
+class CustomerHealthResponse(BaseModel):
+    negative_share: float = 0.0
+    churn_risk_count: int = 0
+    high_urgency_count: int = 0
+    last_touch_at: Optional[datetime] = None
+    competitors: list[str] = Field(default_factory=list)
+    at_risk: bool = False
+
+
 class InsightResponse(BaseModel):
     feature_name: str
     mention_count: int
@@ -59,7 +101,7 @@ class PainPointInsightResponse(BaseModel):
     sentiments: list[str] = Field(default_factory=list)
 
 
-class MentionResponse(BaseModel):
+class MentionResponse(EvidenceAttributes):
     """One piece of evidence: what the customer said, where, and a deep link."""
 
     external_customer_id: str
@@ -74,11 +116,10 @@ class MentionResponse(BaseModel):
     occurred_at: datetime
 
 
-class PainPointMentionResponse(BaseModel):
+class PainPointMentionResponse(EvidenceAttributes):
     external_customer_id: str
     topic_name: str
     summary: str
-    sentiment: str
     confidence: float
     excerpt: str
     source_connector: str
@@ -99,6 +140,8 @@ class FeatureGapResponse(BaseModel):
     max_confidence: Optional[float] = None
     avg_confidence: Optional[float] = None
     low_confidence_count: int = 0
+    status: str = "open"
+    trend: Optional[TrendResponse] = None
 
 
 class AffectedCustomerResponse(BaseModel):
@@ -122,6 +165,8 @@ class PainPointResponse(BaseModel):
     avg_confidence: Optional[float] = None
     low_confidence_count: int = 0
     top_customers: list[str] = Field(default_factory=list)
+    status: str = "open"
+    trend: Optional[TrendResponse] = None
 
 
 class PainPointDetailResponse(PainPointResponse):
@@ -134,8 +179,10 @@ class CustomerResponse(BaseModel):
     customer_name: str
     latest_revenue: Optional[RevenueResponse] = None
     feature_gap_count: int
+    pain_point_count: int = 0
     mention_count: int
     top_insights: list[InsightResponse] = Field(default_factory=list)
+    health: Optional[CustomerHealthResponse] = None
 
 
 class CustomerDetailResponse(CustomerResponse):
@@ -151,6 +198,8 @@ class TopicResponse(BaseModel):
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
     guidance: Optional[str] = None
+    description: Optional[str] = None
+    status: str = "open"
     merged_into_id: Optional[int] = None
     updated_by: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -158,9 +207,10 @@ class TopicResponse(BaseModel):
 
 
 class TopicUpdateRequest(BaseModel):
-    guidance: Optional[str] = None
-    aliases: Optional[list[str]] = None
-    canonical_name: Optional[str] = None
+    guidance: Optional[str] = Field(default=None, max_length=4000)
+    aliases: Optional[list[str]] = Field(default=None, max_length=100)
+    canonical_name: Optional[str] = Field(default=None, min_length=1, max_length=191)
+    status: Optional[TopicStatus] = None
 
 
 class TopicMergeRequestBody(BaseModel):
@@ -177,7 +227,30 @@ class OverviewResponse(BaseModel):
     top_feature_gaps: list[FeatureGapResponse] = Field(default_factory=list)
     top_customers: list[CustomerResponse] = Field(default_factory=list)
     last_mention_at: Optional[datetime] = None
+    pain_point_count: int = 0
+    emerging_feature_gaps: list[FeatureGapResponse] = Field(default_factory=list)
+    at_risk_customers: list[CustomerResponse] = Field(default_factory=list)
+    intent_mix: dict[str, int] = Field(default_factory=dict)
+    tone_mix: dict[str, int] = Field(default_factory=dict)
 
 
 class SourceConnectorsResponse(BaseModel):
     source_connectors: list[str] = Field(default_factory=list)
+
+
+class ErasureResponse(BaseModel):
+    """Rows removed by a GDPR erasure request (also written to the audit log)."""
+
+    customers: int = 0
+    feature_gap_mentions: int = 0
+    pain_point_mentions: int = 0
+    revenue_snapshots: int = 0
+
+
+class AuditEntryResponse(BaseModel):
+    actor: Optional[str] = None
+    action: str
+    target_type: str
+    target_id: str
+    details: dict = Field(default_factory=dict)
+    created_at: Optional[datetime] = None

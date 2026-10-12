@@ -233,8 +233,8 @@ class ContainerUtils:
         """Async factory for SinkOrchestrator.
 
         ``customer_intelligence_provider`` is a DI provider (not a resolved value)
-        so an unreachable MySQL degrades to "uploads are not analysed" instead of
-        blocking indexing startup.
+        so an unavailable intelligence pipeline degrades to "records are not
+        analysed" instead of blocking indexing startup.
         """
         customer_intelligence = None
         if customer_intelligence_provider is not None:
@@ -242,7 +242,7 @@ class ContainerUtils:
                 customer_intelligence = await customer_intelligence_provider()
             except Exception as e:
                 logger.warning(
-                    "⚠️ Customer Feature Intelligence unavailable; KB uploads will not be analysed: %s", e
+                    "⚠️ Customer Feature Intelligence unavailable; records will not be analysed: %s", e
                 )
         orchestrator = SinkOrchestrator(
             graphdb=graphdb,
@@ -387,16 +387,29 @@ class ContainerUtils:
         logger: Logger,
         intelligence_store: object,
         extraction_client: "ExtractionClient",  # type: ignore[name-defined]
+        config_service: ConfigurationService,
     ) -> object:
-        """Async factory for CustomerIntelligenceIngestionService."""
-        from app.modules.customer_intelligence.ingestion_service import (  # noqa: PLC0415
-            CustomerIntelligenceIngestionService,
+        """Async factory for the analysis service (used by the intake API and inline dispatch)."""
+        from app.modules.customer_intelligence.factory import (  # noqa: PLC0415
+            create_analysis_service,
         )
-        return CustomerIntelligenceIngestionService(
-            logger=logger,
-            intelligence_store=intelligence_store,
-            extraction_client=extraction_client,
+        return create_analysis_service(logger, intelligence_store, extraction_client, config_service)
+
+    async def create_customer_intelligence_feeder(
+        self,
+        logger: Logger,
+        config_service: ConfigurationService,
+        analysis_service_provider: object,
+    ) -> object:
+        """Async factory for the SinkOrchestrator feeder.
+
+        Broker mode never touches MySQL or the LLM from indexing; inline mode
+        resolves the analysis service (and so MySQL) on demand.
+        """
+        from app.modules.customer_intelligence.factory import (
+            create_record_feeder,
         )
+        return await create_record_feeder(logger, config_service, analysis_service_provider)
 
     async def create_retrieval_service(
         self,

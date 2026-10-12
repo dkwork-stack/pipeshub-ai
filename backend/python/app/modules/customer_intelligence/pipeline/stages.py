@@ -1,7 +1,7 @@
 """Pipeline stages: verify, dedupe, canonicalize, resolve customer."""
 from __future__ import annotations
 
-import re
+import os
 from difflib import SequenceMatcher
 from typing import Optional, Protocol
 
@@ -11,37 +11,36 @@ from app.models.intelligence import (
     PainPoint,
     TopicKind,
 )
+from app.modules.customer_intelligence.matching.matcher import (
+    ITopicMatcher,
+    LexicalTopicMatcher,
+    topics_of_kind,
+)
 from app.modules.customer_intelligence.pipeline.context import (
     DropReason,
     DropReasonCode,
     ExtractionContext,
 )
-
-_WS = re.compile(r"\s+")
-_PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
-_CORP_SUFFIXES = re.compile(
-    r"\b(inc|incorporated|llc|ltd|limited|gmbh|pty|plc|corp|corporation|co|company|sa|ag)\b\.?",
-    re.IGNORECASE,
+from app.modules.customer_intelligence.text import (
+    normalize_customer_name,
+    normalize_name,
+    normalize_text,
 )
 
-# Fuzzy match threshold for mapping a free-form name onto an existing topic.
-_TOPIC_SIMILARITY = float(__import__("os").getenv("INTELLIGENCE_TOPIC_SIMILARITY", "0.82"))
-_CUSTOMER_SIMILARITY = float(__import__("os").getenv("INTELLIGENCE_CUSTOMER_SIMILARITY", "0.88"))
+__all__ = [
+    "CanonicalizeToTopic",
+    "DedupeWithinEvent",
+    "ResolveCustomer",
+    "Stage",
+    "VerifyExcerpts",
+    "excerpt_grounded",
+    "match_known_customer",
+    "normalize_customer_name",
+    "normalize_name",
+    "normalize_text",
+]
 
-
-def normalize_text(value: str) -> str:
-    return _WS.sub(" ", (value or "").strip().lower())
-
-
-def normalize_name(value: str) -> str:
-    cleaned = _PUNCT.sub(" ", normalize_text(value))
-    return _WS.sub(" ", cleaned).strip()
-
-
-def normalize_customer_name(value: str) -> str:
-    cleaned = normalize_name(value)
-    cleaned = _CORP_SUFFIXES.sub("", cleaned)
-    return _WS.sub(" ", cleaned).strip()
+_CUSTOMER_SIMILARITY = float(os.getenv("INTELLIGENCE_CUSTOMER_SIMILARITY", "0.88"))
 
 
 def excerpt_grounded(excerpt: str, text: str) -> bool:
@@ -202,109 +201,72 @@ class DedupeWithinEvent:
 
 
 class CanonicalizeToTopic:
-    """Map each item onto an existing taxonomy topic, or record a new proposal.
+    """Classify each item against the org's known topics (§6 of the architecture doc).
 
-    Matching order: LLM ``topic_id`` → exact/alias → fuzzy SequenceMatcher.
-    When nothing matches, the free-form name is kept and the caller (ingestion)
-    will upsert a new topic under that name.
+    Order: the LLM's ``topic_id`` hint, then ``ITopicMatcher`` (lexical, then
+    semantic when an embedding model is configured). A match renames the item
+    to the topic's canonical name; a non-exact match also proposes the item's
+    own wording as a new alias. No match keeps the free-form name, and the
+    ingestion service creates a topic for it.
     """
 
-    def __init__(self, similarity: float = _TOPIC_SIMILARITY) -> None:
-        self.similarity = similarity
+    def __init__(self, matcher: Optional[ITopicMatcher] = None, similarity: Optional[float] = None) -> None:
+        self.matcher = matcher or LexicalTopicMatcher(similarity)
 
     async def run(self, ctx: ExtractionContext) -> ExtractionContext:
         by_id = {str(t.id): t for t in ctx.taxonomy if t.id is not None and t.merged_into_id is None}
-        gaps_by_kind = [t for t in ctx.taxonomy if t.kind == TopicKind.FEATURE_GAP and t.merged_into_id is None]
-        pains_by_kind = [t for t in ctx.taxonomy if t.kind == TopicKind.PAIN_POINT and t.merged_into_id is None]
+        gap_topics = topics_of_kind(ctx.taxonomy, TopicKind.FEATURE_GAP)
+        pain_topics = topics_of_kind(ctx.taxonomy, TopicKind.PAIN_POINT)
 
         mapped_gaps: list[FeatureGapCandidate] = []
         for gap in ctx.result.feature_gaps:
-            mapped = self._map_gap(gap, by_id, gaps_by_kind, ctx)
-            if mapped is not None:
-                mapped_gaps.append(mapped)
+            topic = await self._resolve(ctx, gap.topic_id, gap.feature_name, gap.description, by_id, gap_topics, TopicKind.FEATURE_GAP)
+            if topic is None:
+                mapped_gaps.append(gap.model_copy(update={"topic_id": None}))
+            elif not self._excluded(ctx, topic, "feature_gap", gap.feature_name, gap.excerpt, gap.description):
+                mapped_gaps.append(gap.model_copy(update={"feature_name": topic.canonical_name, "topic_id": str(topic.id)}))
 
         mapped_pains: list[PainPoint] = []
         for pain in ctx.result.pain_points:
-            mapped = self._map_pain(pain, by_id, pains_by_kind, ctx)
-            if mapped is not None:
-                mapped_pains.append(mapped)
+            topic = await self._resolve(ctx, pain.topic_id, pain.summary, pain.summary, by_id, pain_topics, TopicKind.PAIN_POINT)
+            if topic is None:
+                mapped_pains.append(pain.model_copy(update={"topic_id": None}))
+            elif not self._excluded(ctx, topic, "pain_point", pain.summary, pain.excerpt):
+                mapped_pains.append(pain.model_copy(update={"summary": topic.canonical_name, "topic_id": str(topic.id)}))
 
         ctx.result.feature_gaps = mapped_gaps
         ctx.result.pain_points = mapped_pains
         return ctx
 
-    def _map_gap(
+    async def _resolve(
         self,
-        gap: FeatureGapCandidate,
-        by_id: dict[str, IntelligenceTopic],
-        topics: list[IntelligenceTopic],
         ctx: ExtractionContext,
-    ) -> Optional[FeatureGapCandidate]:
-        topic = self._resolve(gap.topic_id, gap.feature_name, by_id, topics)
-        if topic is None:
-            return gap
-        if self._guidance_excludes(topic.guidance, gap.feature_name, gap.excerpt, gap.description):
-            ctx.dropped.append(
-                DropReason(
-                    code=DropReasonCode.GUIDANCE_EXCLUDED,
-                    kind="feature_gap",
-                    name=gap.feature_name,
-                    detail=topic.canonical_name,
-                )
-            )
-            return None
-        return gap.model_copy(
-            update={"feature_name": topic.canonical_name, "topic_id": str(topic.id)}
-        )
-
-    def _map_pain(
-        self,
-        pain: PainPoint,
-        by_id: dict[str, IntelligenceTopic],
-        topics: list[IntelligenceTopic],
-        ctx: ExtractionContext,
-    ) -> Optional[PainPoint]:
-        topic = self._resolve(pain.topic_id, pain.summary, by_id, topics)
-        if topic is None:
-            return pain
-        if self._guidance_excludes(topic.guidance, pain.summary, pain.excerpt):
-            ctx.dropped.append(
-                DropReason(
-                    code=DropReasonCode.GUIDANCE_EXCLUDED,
-                    kind="pain_point",
-                    name=pain.summary,
-                    detail=topic.canonical_name,
-                )
-            )
-            return None
-        return pain.model_copy(
-            update={"summary": topic.canonical_name, "topic_id": str(topic.id)}
-        )
-
-    def _resolve(
-        self,
         topic_id: Optional[str],
         name: str,
+        description: str,
         by_id: dict[str, IntelligenceTopic],
         topics: list[IntelligenceTopic],
+        kind: TopicKind,
     ) -> Optional[IntelligenceTopic]:
-        if topic_id and topic_id in by_id:
-            return by_id[topic_id]
+        hinted = by_id.get(topic_id) if topic_id else None
+        if hinted is not None and hinted.kind == kind:
+            topic, exact = hinted, normalize_name(hinted.canonical_name) == normalize_name(name)
+        else:
+            found = await self.matcher.match(ctx.org_id, name, description, topics)
+            if found is None:
+                return None
+            topic, exact = found.topic, found.method in ("exact", "alias")
+        if not exact and topic.id is not None and name.strip():
+            ctx.alias_proposals.append((topic.id, name.strip()))
+        return topic
 
-        name_n = normalize_name(name)
-        for topic in topics:
-            if normalize_name(topic.canonical_name) == name_n:
-                return topic
-            for alias in topic.aliases or []:
-                if normalize_name(alias) == name_n:
-                    return topic
-
-        candidates = [(str(t.id), t.canonical_name) for t in topics if t.id is not None]
-        for topic in topics:
-            for alias in topic.aliases or []:
-                candidates.append((str(topic.id), alias))
-        matched_id = _best_match(name, candidates, self.similarity)
-        return by_id.get(matched_id) if matched_id else None
+    def _excluded(self, ctx: ExtractionContext, topic: IntelligenceTopic, kind: str, name: str, *texts: str) -> bool:
+        if not self._guidance_excludes(topic.guidance, name, *texts):
+            return False
+        ctx.dropped.append(
+            DropReason(code=DropReasonCode.GUIDANCE_EXCLUDED, kind=kind, name=name, detail=topic.canonical_name)
+        )
+        return True
 
     @staticmethod
     def _guidance_excludes(guidance: Optional[str], *texts: str) -> bool:
@@ -319,7 +281,7 @@ class CanonicalizeToTopic:
         haystack = " ".join(normalize_text(t) for t in texts if t)
         for line in guidance.splitlines():
             lower = line.strip().lower()
-            if not (lower.startswith("exclude:") or lower.startswith("ignore:")):
+            if not lower.startswith(("exclude:", "ignore:")):
                 continue
             phrase = lower.split(":", 1)[1].strip()
             if phrase and phrase in haystack:

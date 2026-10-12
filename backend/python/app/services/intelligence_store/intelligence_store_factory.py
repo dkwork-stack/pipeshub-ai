@@ -7,11 +7,13 @@ Environment variables:
     INTELLIGENCE_STORE_TYPE: backend type ("mysql", default)
     INTELLIGENCE_MYSQL_HOST / _PORT / _USER / _PASSWORD / _DATABASE
     INTELLIGENCE_MYSQL_DSN: full SQLAlchemy DSN, takes precedence if set
+    INTELLIGENCE_MYSQL_SSL / _SSL_CA: TLS to MySQL (verify against the CA bundle when given)
 """
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+import ssl
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote_plus
 
 if TYPE_CHECKING:
@@ -72,12 +74,22 @@ class IntelligenceStoreFactory:
         return dsn
 
     @staticmethod
+    def _mysql_connect_args() -> dict[str, Any]:
+        if os.getenv("INTELLIGENCE_MYSQL_SSL", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+            return {}
+        return {"ssl": ssl.create_default_context(cafile=os.getenv("INTELLIGENCE_MYSQL_SSL_CA") or None)}
+
+    @staticmethod
     async def _create_mysql_store(logger: Logger) -> "MySQLIntelligenceStore":
         from app.services.intelligence_store.mysql.mysql_intelligence_store import (
             MySQLIntelligenceStore,
         )
 
-        store = MySQLIntelligenceStore(logger=logger, dsn=IntelligenceStoreFactory._mysql_dsn())
+        store = MySQLIntelligenceStore(
+            logger=logger,
+            dsn=IntelligenceStoreFactory._mysql_dsn(),
+            connect_args=IntelligenceStoreFactory._mysql_connect_args(),
+        )
         connected = await store.connect()
         if not connected:
             raise ConnectionError("Failed to connect MySQLIntelligenceStore")

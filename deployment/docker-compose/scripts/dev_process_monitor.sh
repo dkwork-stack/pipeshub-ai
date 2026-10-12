@@ -57,6 +57,9 @@ cd /app/python
 watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.indexing_main &
 watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.docling_main &
 watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.intelligence_main &
+if [ "${INTELLIGENCE_DISPATCH_MODE:-inline}" = "broker" ]; then
+    watchmedo auto-restart --recursive --pattern="*.py" --directory="." -- python -m app.intelligence_worker_main &
+fi
 
 sleep 10
 

@@ -590,6 +590,14 @@ If a deployment still stalls with `blocked` true and both gates full, the node i
 
 ## 8. Customer Feature Intelligence (additive)
 
+> The current pipeline (signal envelopes, the `intelligence-events` topic, the
+> intelligence worker, semantic topic matching, compliance controls) is
+> described in [customer-intelligence-architecture.md](./customer-intelligence-architecture.md).
+> From indexing's side the only hook is `SinkOrchestrator._feed_customer_intelligence`,
+> which normalises an indexed record into envelopes and dispatches them; it makes
+> no LLM or MySQL call in broker mode. The subsections below keep the original
+> contracts and adapter notes.
+
 A connector-agnostic capability layered onto this service to turn customer
 support/CRM/call/revenue data into revenue-weighted, citation-backed product
 feature-gap intelligence for CPOs/VPs/PMs. It is additive: a MySQL outage
@@ -660,7 +668,7 @@ Frontend portal  /intelligence  (frontend/app/(main)/intelligence)
 | Chargebee (MRR/ARR/seats/renewal) | new minimal `ChargebeeClient`/`ChargebeeDataSource` (`app/sources/{client,external}/chargebee/`) | `scripts/customer_intelligence/chargebee_sync.py` |
 | Freshdesk (tickets + conversations) | existing `FreshDeskClient`/`FreshdeskDataSource` | `scripts/customer_intelligence/freshdesk_sync.py` |
 | Salesforce (Cases via SOQL) | existing `SalesforceDataSource.soql_query` | `scripts/customer_intelligence/salesforce_sync.py` |
-| CSV / PDF / document upload (UI) | **In-process, no script.** Any Knowledge Base record becomes intelligence input once it is searchable: `SinkOrchestrator._feed_customer_intelligence` → `CustomerIntelligenceIngestionService.ingest_indexed_record`. Tabular uploads are one event per `TABLE_ROW` block (capped by `INTELLIGENCE_UPLOAD_MAX_ROWS`, `INTELLIGENCE_UPLOAD_CONCURRENCY` parallel LLM calls); other documents are one event. The extractor is asked to infer `customer_name` (`infer_customer=true`); the file name is the fallback so evidence is never dropped. Failure-isolated: a MySQL/LLM error is logged and the record stays indexed. | — |
+| CSV / PDF / document upload (UI) and connector tickets, cases, meetings | **In-process, no script.** Any Knowledge Base record, and any connector record whose type is in `INTELLIGENCE_SOURCE_RECORD_TYPES`, becomes intelligence input once it is searchable: `SinkOrchestrator._feed_customer_intelligence` → `IntelligenceRecordFeeder` (normalise to envelopes) → dispatcher (`INTELLIGENCE_DISPATCH_MODE`: broker → `app.intelligence_worker_main`, or inline). Tabular uploads are one envelope per `TABLE_ROW` block (capped by `INTELLIGENCE_UPLOAD_MAX_ROWS`); ticket threads are one envelope with role-labelled turns; other documents are one envelope. Failure-isolated: a broker/MySQL/LLM error is logged and the record stays indexed. | — |
 | CSV / PDF upload (CLI, legacy) | Same contracts, driven from outside the process for scripted bulk loads. | `scripts/customer_intelligence/file_upload.py` |
 
 The three connector adapters are standalone scripts, not connectors wired into the registry —

@@ -10,41 +10,56 @@ page's customer ids, instead of one query per row.
 """
 from __future__ import annotations
 
-from collections import defaultdict
 import os
+from collections import defaultdict
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Select, and_, case, exists, func, literal, or_, select
+from sqlalchemy import Select, and_, case, exists, func, literal, or_, select, union_all
 
 from app.models.intelligence import (
     AffectedCustomer,
     CustomerDetail,
     CustomerFilter,
+    CustomerHealth,
     CustomerInsight,
     CustomerSummary,
     FeatureGapDetail,
     FeatureGapFilter,
-    FeatureGapMentionRecord,
     FeatureGapScore,
     IntelligenceOverview,
     MentionFilter,
     PainPointDetail,
     PainPointFilter,
     PainPointInsight,
-    PainPointMentionRecord,
     PainPointScore,
     RevenueSummary,
+    TopicKind,
+    TopicStatus,
+    TopicTrend,
+    Urgency,
 )
 from app.services.intelligence_store.interface.intelligence_query_repository import (
     IIntelligenceQueryRepository,
+)
+from app.services.intelligence_store.mysql.aggregates import (
+    TREND_WINDOW,
+    chunked,
+    topic_trends,
+)
+from app.services.intelligence_store.mysql.rows import (
+    mention_from_row,
+    pain_mention_from_row,
+    trend_from_json,
 )
 from app.services.intelligence_store.mysql.schema import (
     customers,
     feature_gap_mentions,
     feature_gap_scores,
+    intelligence_topics,
     pain_point_mentions,
     revenue_snapshots,
 )
+from app.services.intelligence_store.mysql.sql import utcnow
 
 _LOW_CONFIDENCE = float(os.getenv("INTELLIGENCE_SCORE_MIN_CONFIDENCE", "0.5"))
 
@@ -61,7 +76,9 @@ def _like_pattern(query: str) -> str:
     return f"%{escaped}%"
 
 
-def _score_from_row(r: "RowMapping", *, conf: Optional[dict] = None) -> FeatureGapScore:
+def _score_from_row(
+    r: "RowMapping", *, conf: Optional[dict] = None, status: TopicStatus = TopicStatus.OPEN
+) -> FeatureGapScore:
     return FeatureGapScore(
         org_id=r["org_id"],
         feature_name=r["feature_name"],
@@ -74,40 +91,19 @@ def _score_from_row(r: "RowMapping", *, conf: Optional[dict] = None) -> FeatureG
         max_confidence=(conf or {}).get("max_confidence"),
         avg_confidence=(conf or {}).get("avg_confidence"),
         low_confidence_count=(conf or {}).get("low_confidence_count", 0),
+        trend=trend_from_json(r.get("trend")),
+        status=status,
     )
 
 
-def _mention_from_row(m: "RowMapping") -> FeatureGapMentionRecord:
-    return FeatureGapMentionRecord(
-        org_id=m["org_id"],
-        external_customer_id=m["external_customer_id"],
-        feature_name=m["feature_name"],
-        description=m["description"] or "",
-        confidence=m["confidence"],
-        excerpt=m["excerpt"] or "",
-        source_connector=m["source_connector"],
-        source_type=m["source_type"],
-        external_event_id=m["external_event_id"],
-        citation_url=m["citation_url"],
-        occurred_at=m["occurred_at"],
-    )
+_HIGH_URGENCY = (Urgency.HIGH.value, Urgency.CRITICAL.value)
 
 
-def _pain_mention_from_row(m: "RowMapping") -> PainPointMentionRecord:
-    return PainPointMentionRecord(
-        org_id=m["org_id"],
-        external_customer_id=m["external_customer_id"],
-        topic_name=m["topic_name"],
-        summary=m["summary"] or m["topic_name"],
-        sentiment=m["sentiment"] or "Neutral",
-        confidence=m["confidence"],
-        excerpt=m["excerpt"] or "",
-        source_connector=m["source_connector"],
-        source_type=m["source_type"],
-        external_event_id=m["external_event_id"],
-        citation_url=m["citation_url"],
-        occurred_at=m["occurred_at"],
-    )
+def _growth(trend: Optional[TopicTrend]) -> float:
+    """Emerging = recent volume that outpaces the prior window (new asks rank by volume)."""
+    if trend is None or trend.mentions_last_30d == 0:
+        return 0.0
+    return (trend.mentions_last_30d - trend.mentions_prev_30d) + trend.mentions_last_30d / (1 + trend.mentions_prev_30d)
 
 
 def _revenue_from_row(r: Optional["RowMapping"], prefix: str = "") -> Optional[RevenueSummary]:
@@ -198,6 +194,114 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
         if mention_filter.min_confidence is not None:
             conds.append(pain_point_mentions.c.confidence >= mention_filter.min_confidence)
         return conds
+
+    @staticmethod
+    async def _status_by_name(
+        conn: AsyncConnection, org_id: str, kind: TopicKind, names: list[str]
+    ) -> dict[str, TopicStatus]:
+        out: dict[str, TopicStatus] = {}
+        for chunk in chunked(names):
+            rows = await conn.execute(
+                select(intelligence_topics.c.canonical_name, intelligence_topics.c.status).where(
+                    intelligence_topics.c.org_id == org_id,
+                    intelligence_topics.c.kind == kind.value,
+                    intelligence_topics.c.merged_into_id.is_(None),
+                    intelligence_topics.c.canonical_name.in_(chunk),
+                )
+            )
+            for name, status in rows:
+                out[name] = TopicStatus(status or TopicStatus.OPEN.value)
+        return out
+
+    @staticmethod
+    def _topic_status_condition(name_col: ColumnElement, org_id: str, kind: TopicKind, status: TopicStatus) -> ColumnElement:
+        topic_match = select(literal(1)).where(
+            intelligence_topics.c.org_id == org_id,
+            intelligence_topics.c.kind == kind.value,
+            intelligence_topics.c.merged_into_id.is_(None),
+            intelligence_topics.c.canonical_name == name_col,
+            func.coalesce(intelligence_topics.c.status, TopicStatus.OPEN.value) == status.value,
+        )
+        if status == TopicStatus.OPEN:
+            # Topics never curated have no row status yet; they are open.
+            no_topic = ~exists(
+                select(literal(1)).where(
+                    intelligence_topics.c.org_id == org_id,
+                    intelligence_topics.c.kind == kind.value,
+                    intelligence_topics.c.canonical_name == name_col,
+                )
+            )
+            return or_(exists(topic_match), no_topic)
+        return exists(topic_match)
+
+    @staticmethod
+    def _all_mentions(org_id: str) -> Subquery:
+        """Both mention tables as one relation, for per-customer health roll-ups."""
+        cols = lambda t: [  # noqa: E731
+            t.c.external_customer_id, t.c.sentiment, t.c.urgency, t.c.churn_risk,
+            t.c.competitor, t.c.occurred_at,
+        ]
+        return union_all(
+            select(*cols(feature_gap_mentions)).where(feature_gap_mentions.c.org_id == org_id),
+            select(*cols(pain_point_mentions)).where(pain_point_mentions.c.org_id == org_id),
+        ).subquery("all_mentions")
+
+    def _risk_by_customer(self, org_id: str) -> Subquery:
+        m = self._all_mentions(org_id)
+        return (
+            select(
+                m.c.external_customer_id,
+                func.count().label("total"),
+                func.sum(case((m.c.sentiment == "Negative", 1), else_=0)).label("negative"),
+                func.sum(case((m.c.churn_risk.is_(True), 1), else_=0)).label("churn"),
+                func.sum(case((m.c.urgency.in_(_HIGH_URGENCY), 1), else_=0)).label("high_urgency"),
+                func.max(m.c.occurred_at).label("last_touch_at"),
+            )
+            .group_by(m.c.external_customer_id)
+            .subquery("customer_risk")
+        )
+
+    async def _health_by_customer(
+        self, conn: AsyncConnection, org_id: str, customer_ids: list[str]
+    ) -> dict[str, CustomerHealth]:
+        if not customer_ids:
+            return {}
+        risk = self._risk_by_customer(org_id)
+        rows = (
+            await conn.execute(select(risk).where(risk.c.external_customer_id.in_(customer_ids)))
+        ).mappings().all()
+        m = self._all_mentions(org_id)
+        competitor_rows = await conn.execute(
+            select(m.c.external_customer_id, m.c.competitor)
+            .where(m.c.external_customer_id.in_(customer_ids), m.c.competitor.is_not(None))
+            .group_by(m.c.external_customer_id, m.c.competitor)
+        )
+        competitors: dict[str, list[str]] = defaultdict(list)
+        for cid, competitor in competitor_rows:
+            competitors[cid].append(competitor)
+        out: dict[str, CustomerHealth] = {}
+        for r in rows:
+            total = int(r["total"] or 0)
+            out[r["external_customer_id"]] = CustomerHealth(
+                negative_share=round(int(r["negative"] or 0) / total, 3) if total else 0.0,
+                churn_risk_count=int(r["churn"] or 0),
+                high_urgency_count=int(r["high_urgency"] or 0),
+                last_touch_at=r["last_touch_at"],
+                competitors=sorted(competitors.get(r["external_customer_id"], []))[:5],
+            )
+        return out
+
+    async def _pain_counts_by_customer(
+        self, conn: AsyncConnection, org_id: str, customer_ids: list[str]
+    ) -> dict[str, int]:
+        if not customer_ids:
+            return {}
+        rows = await conn.execute(
+            select(pain_point_mentions.c.external_customer_id, func.count(pain_point_mentions.c.topic_name.distinct()))
+            .where(pain_point_mentions.c.org_id == org_id, pain_point_mentions.c.external_customer_id.in_(customer_ids))
+            .group_by(pain_point_mentions.c.external_customer_id)
+        )
+        return {cid: int(n) for cid, n in rows}
 
     async def _confidence_by_feature(
         self, conn: AsyncConnection, org_id: str, feature_names: list[str]
@@ -375,23 +479,38 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                     source_connector=filters.source_connector,
                 )
             )
+        if filters.at_risk:
+            risk = self._risk_by_customer(org_id)
+            stmt = stmt.where(
+                customers.c.external_customer_id.in_(
+                    select(risk.c.external_customer_id).where(
+                        or_(risk.c.churn > 0, risk.c.negative * 2 >= risk.c.total)
+                    )
+                )
+            )
         return stmt, latest
 
-    @staticmethod
-    def _summaries_from_rows(
-        rows: list[RowMapping], insights_by_customer: dict[str, list[CustomerInsight]], top_insights: int
+    async def _summaries(
+        self, conn: AsyncConnection, org_id: str, rows: list[RowMapping], top_insights: int
     ) -> list[CustomerSummary]:
+        ids = [r["external_customer_id"] for r in rows]
+        insights_by_customer = await self._insights_by_customer(conn, org_id, ids)
+        health = await self._health_by_customer(conn, org_id, ids)
+        pain_counts = await self._pain_counts_by_customer(conn, org_id, ids)
         summaries: list[CustomerSummary] = []
         for r in rows:
-            insights = insights_by_customer.get(r["external_customer_id"], [])
+            cid = r["external_customer_id"]
+            insights = insights_by_customer.get(cid, [])
             summaries.append(
                 CustomerSummary(
-                    external_customer_id=r["external_customer_id"],
+                    external_customer_id=cid,
                     customer_name=r["customer_name"],
                     latest_revenue=_revenue_from_row(r, prefix="latest_"),
                     feature_gap_count=len(insights),
+                    pain_point_count=pain_counts.get(cid, 0),
                     mention_count=sum(i.mention_count for i in insights),
                     top_insights=insights[:top_insights],
+                    health=health.get(cid),
                 )
             )
         return summaries
@@ -466,9 +585,58 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                     .limit(top_n)
                 )
             ).mappings().all()
+            # Emerging: recent activity only, ranked by growth over the prior window.
+            recent_gap_rows = (
+                await conn.execute(
+                    select(feature_gap_scores).where(
+                        feature_gap_scores.c.org_id == org_id,
+                        feature_gap_scores.c.feature_name.in_(
+                            select(feature_gap_mentions.c.feature_name)
+                            .where(
+                                feature_gap_mentions.c.org_id == org_id,
+                                feature_gap_mentions.c.occurred_at >= utcnow() - TREND_WINDOW,
+                            )
+                            .distinct()
+                        ),
+                    )
+                )
+            ).mappings().all()
+            emerging_rows = sorted(
+                (r for r in recent_gap_rows if _growth(trend_from_json(r.get("trend"))) > 0),
+                key=lambda r: (-_growth(trend_from_json(r.get("trend"))), -r["score"]),
+            )[:top_n]
+            statuses = await self._status_by_name(
+                conn, org_id, TopicKind.FEATURE_GAP,
+                [r["feature_name"] for r in (*top_gap_rows, *emerging_rows)],
+            )
+            pain_count = (
+                await conn.execute(
+                    select(func.count(pain_point_mentions.c.topic_name.distinct())).where(
+                        pain_point_mentions.c.org_id == org_id
+                    )
+                )
+            ).scalar_one()
+            intent_mix = {
+                k: int(v)
+                for k, v in await conn.execute(
+                    select(feature_gap_mentions.c.intent, func.count())
+                    .where(feature_gap_mentions.c.org_id == org_id, feature_gap_mentions.c.intent.is_not(None))
+                    .group_by(feature_gap_mentions.c.intent)
+                )
+            }
+            m = self._all_mentions(org_id)
+            tone_mix = {
+                k: int(v)
+                for k, v in await conn.execute(
+                    select(m.c.sentiment, func.count()).where(m.c.sentiment.is_not(None)).group_by(m.c.sentiment)
+                )
+            }
 
         top_customers, _ = await self.search_customers(
             org_id, CustomerFilter(), limit=top_n, offset=0, top_insights=3
+        )
+        at_risk_customers, _ = await self.search_customers(
+            org_id, CustomerFilter(at_risk=True), limit=top_n, offset=0, top_insights=3
         )
 
         fg_last = counts["last_mention_at"] if counts else None
@@ -485,9 +653,18 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             customer_count=counts["customer_count"] if counts else 0,
             mention_count=counts["mention_count"] if counts else 0,
             source_connectors=connectors,
-            top_feature_gaps=[_score_from_row(r) for r in top_gap_rows],
+            top_feature_gaps=[
+                _score_from_row(r, status=statuses.get(r["feature_name"], TopicStatus.OPEN)) for r in top_gap_rows
+            ],
             top_customers=top_customers,
             last_mention_at=last_mention_at,
+            pain_point_count=int(pain_count or 0),
+            emerging_feature_gaps=[
+                _score_from_row(r, status=statuses.get(r["feature_name"], TopicStatus.OPEN)) for r in emerging_rows
+            ],
+            at_risk_customers=at_risk_customers,
+            intent_mix=intent_mix,
+            tone_mix=tone_mix,
         )
 
     # -------------------------------------------------------------- feature gaps
@@ -510,6 +687,20 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                     min_confidence=filters.min_confidence,
                 )
             )
+        if filters.intent is not None:
+            stmt = stmt.where(
+                exists(
+                    select(literal(1)).where(
+                        feature_gap_mentions.c.org_id == org_id,
+                        feature_gap_mentions.c.feature_name == feature_gap_scores.c.feature_name,
+                        feature_gap_mentions.c.intent == filters.intent.value,
+                    )
+                )
+            )
+        if filters.status is not None:
+            stmt = stmt.where(
+                self._topic_status_condition(feature_gap_scores.c.feature_name, org_id, TopicKind.FEATURE_GAP, filters.status)
+            )
         return stmt
 
     async def search_feature_gaps(
@@ -525,10 +716,13 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
         async with self._engine.connect() as conn:
             total = (await conn.execute(count_stmt)).scalar_one()
             rows = (await conn.execute(page_stmt)).mappings().all()
-            conf = await self._confidence_by_feature(
-                conn, org_id, [r["feature_name"] for r in rows]
-            )
-        return [_score_from_row(r, conf=conf.get(r["feature_name"])) for r in rows], int(total)
+            names = [r["feature_name"] for r in rows]
+            conf = await self._confidence_by_feature(conn, org_id, names)
+            statuses = await self._status_by_name(conn, org_id, TopicKind.FEATURE_GAP, names)
+        return [
+            _score_from_row(r, conf=conf.get(r["feature_name"]), status=statuses.get(r["feature_name"], TopicStatus.OPEN))
+            for r in rows
+        ], int(total)
 
     async def get_feature_gap(
         self, org_id: str, feature_name: str, mention_filter: MentionFilter
@@ -589,9 +783,12 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             affected_rows = (await conn.execute(affected_stmt)).mappings().all()
             mention_rows = (await conn.execute(mentions_stmt)).mappings().all()
             conf = await self._confidence_by_feature(conn, org_id, [feature_name])
+            statuses = await self._status_by_name(conn, org_id, TopicKind.FEATURE_GAP, [feature_name])
 
         return FeatureGapDetail(
-            score=_score_from_row(score_row, conf=conf.get(feature_name)),
+            score=_score_from_row(
+                score_row, conf=conf.get(feature_name), status=statuses.get(feature_name, TopicStatus.OPEN)
+            ),
             affected_customers=[
                 AffectedCustomer(
                     external_customer_id=r["external_customer_id"],
@@ -602,7 +799,7 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                 )
                 for r in affected_rows
             ],
-            mentions=[_mention_from_row(m) for m in mention_rows],
+            mentions=[mention_from_row(m) for m in mention_rows],
         )
 
     async def search_pain_points(
@@ -620,6 +817,10 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             conds.append(pain_point_mentions.c.external_customer_id == filters.external_customer_id)
         if filters.min_confidence is not None:
             conds.append(pain_point_mentions.c.confidence >= filters.min_confidence)
+        if filters.status is not None:
+            conds.append(
+                self._topic_status_condition(pain_point_mentions.c.topic_name, org_id, TopicKind.PAIN_POINT, filters.status)
+            )
 
         grouped = (
             select(
@@ -646,47 +847,55 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
         async with self._engine.connect() as conn:
             total = (await conn.execute(count_stmt)).scalar_one()
             rows = (await conn.execute(page_stmt)).mappings().all()
-            # Top customers per topic on the page
-            scores: list[PainPointScore] = []
-            for r in rows:
-                top_rows = (
-                    await conn.execute(
-                        select(
-                            customers.c.customer_name,
-                            func.count().label("n"),
-                        )
-                        .select_from(
-                            pain_point_mentions.outerjoin(
-                                customers,
-                                and_(
-                                    customers.c.org_id == org_id,
-                                    customers.c.external_customer_id
-                                    == pain_point_mentions.c.external_customer_id,
-                                ),
-                            )
-                        )
-                        .where(
-                            pain_point_mentions.c.org_id == org_id,
-                            pain_point_mentions.c.topic_name == r["topic_name"],
-                        )
-                        .group_by(customers.c.customer_name)
-                        .order_by(func.count().desc())
-                        .limit(5)
-                    )
-                ).all()
-                scores.append(
-                    PainPointScore(
-                        org_id=org_id,
-                        topic_name=r["topic_name"],
-                        customer_count=r["customer_count"],
-                        mention_count=r["mention_count"],
-                        max_confidence=float(r["max_confidence"] or 0.0),
-                        avg_confidence=float(r["avg_confidence"]) if r["avg_confidence"] is not None else None,
-                        low_confidence_count=int(r["low_confidence_count"] or 0),
-                        top_customers=[name for name, _ in top_rows if name],
+            names = [r["topic_name"] for r in rows]
+            top = await self._top_customers_by_pain_topic(conn, org_id, names)
+            trends = await topic_trends(conn, pain_point_mentions, "topic_name", org_id, names, now=utcnow())
+            statuses = await self._status_by_name(conn, org_id, TopicKind.PAIN_POINT, names)
+        scores = [
+            PainPointScore(
+                org_id=org_id,
+                topic_name=r["topic_name"],
+                customer_count=r["customer_count"],
+                mention_count=r["mention_count"],
+                max_confidence=float(r["max_confidence"] or 0.0),
+                avg_confidence=float(r["avg_confidence"]) if r["avg_confidence"] is not None else None,
+                low_confidence_count=int(r["low_confidence_count"] or 0),
+                top_customers=top.get(r["topic_name"], []),
+                trend=trends.get(r["topic_name"]),
+                status=statuses.get(r["topic_name"], TopicStatus.OPEN),
+            )
+            for r in rows
+        ]
+        return scores, int(total)
+
+    @staticmethod
+    async def _top_customers_by_pain_topic(
+        conn: AsyncConnection, org_id: str, names: list[str], limit: int = 5
+    ) -> dict[str, list[str]]:
+        """One grouped query for the whole page instead of one per topic."""
+        out: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        for chunk in chunked(names):
+            rows = await conn.execute(
+                select(
+                    pain_point_mentions.c.topic_name,
+                    func.coalesce(customers.c.customer_name, pain_point_mentions.c.external_customer_id),
+                    func.count(),
+                )
+                .select_from(
+                    pain_point_mentions.outerjoin(
+                        customers,
+                        and_(
+                            customers.c.org_id == org_id,
+                            customers.c.external_customer_id == pain_point_mentions.c.external_customer_id,
+                        ),
                     )
                 )
-        return scores, int(total)
+                .where(pain_point_mentions.c.org_id == org_id, pain_point_mentions.c.topic_name.in_(chunk))
+                .group_by(pain_point_mentions.c.topic_name, customers.c.customer_name, pain_point_mentions.c.external_customer_id)
+            )
+            for topic, name, n in rows:
+                out[topic].append((int(n), name))
+        return {t: [n for _, n in sorted(v, key=lambda p: (-p[0], p[1]))[:limit]] for t, v in out.items()}
 
     async def get_pain_point(
         self, org_id: str, topic_name: str, mention_filter: MentionFilter
@@ -716,6 +925,9 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             if not row or not row["mention_count"]:
                 return None
 
+            trends = await topic_trends(conn, pain_point_mentions, "topic_name", org_id, [topic_name], now=utcnow())
+            statuses = await self._status_by_name(conn, org_id, TopicKind.PAIN_POINT, [topic_name])
+            top = await self._top_customers_by_pain_topic(conn, org_id, [topic_name])
             score = PainPointScore(
                 org_id=org_id,
                 topic_name=topic_name,
@@ -724,6 +936,9 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                 max_confidence=float(row["max_confidence"] or 0.0),
                 avg_confidence=float(row["avg_confidence"]) if row["avg_confidence"] is not None else None,
                 low_confidence_count=int(row["low_confidence_count"] or 0),
+                top_customers=top.get(topic_name, []),
+                trend=trends.get(topic_name),
+                status=statuses.get(topic_name, TopicStatus.OPEN),
             )
             latest = self._latest_snapshots(org_id)
             per_customer = (
@@ -786,7 +1001,7 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
                 )
                 for r in affected_rows
             ],
-            mentions=[_pain_mention_from_row(m) for m in mention_rows],
+            mentions=[pain_mention_from_row(m) for m in mention_rows],
         )
 
     # ----------------------------------------------------------------- customers
@@ -805,8 +1020,8 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
         async with self._engine.connect() as conn:
             total = (await conn.execute(count_stmt)).scalar_one()
             rows = (await conn.execute(page_stmt)).mappings().all()
-            insights = await self._insights_by_customer(conn, org_id, [r["external_customer_id"] for r in rows])
-        return self._summaries_from_rows(rows, insights, top_insights), int(total)
+            summaries = await self._summaries(conn, org_id, rows, top_insights)
+        return summaries, int(total)
 
     async def get_customer(
         self, org_id: str, external_customer_id: str, mention_filter: MentionFilter
@@ -849,14 +1064,14 @@ class MySQLIntelligenceQueryRepository(IIntelligenceQueryRepository):
             ).get(external_customer_id, [])
             mention_rows = (await conn.execute(mentions_stmt)).mappings().all()
             pain_mention_rows = (await conn.execute(pain_mentions_stmt)).mappings().all()
+            summary = (await self._summaries(conn, org_id, [row], top_insights=3))[0]
 
-        summary = self._summaries_from_rows([row], {external_customer_id: insights}, top_insights=3)[0]
         return CustomerDetail(
             **summary.model_dump(),
             insights=insights,
             pain_point_insights=pain_insights,
-            mentions=[_mention_from_row(m) for m in mention_rows],
-            pain_point_mentions=[_pain_mention_from_row(m) for m in pain_mention_rows],
+            mentions=[mention_from_row(m) for m in mention_rows],
+            pain_point_mentions=[pain_mention_from_row(m) for m in pain_mention_rows],
         )
 
     async def list_source_connectors(self, org_id: str) -> list[str]:

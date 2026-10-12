@@ -1,4 +1,4 @@
-"""Taxonomy topic routes for the intelligence portal (guidance / aliases / merge)."""
+"""Taxonomy topic routes for the intelligence portal (guidance / aliases / status / merge)."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.middlewares.auth import require_scopes
-from app.api.routes.intelligence_portal.dependencies import org_id
+from app.api.routes.intelligence_portal.dependencies import actor, org_id
 from app.api.schemas.intelligence_portal import (
     TopicMergeRequestBody,
     TopicResponse,
@@ -61,19 +61,18 @@ async def get_topic(
 async def update_topic(
     topic_id: int,
     body: TopicUpdateRequest,
-    request: Request,
     org: str = Depends(org_id),
+    who: Optional[str] = Depends(actor),
     service: TopicService = Depends(topic_service),
 ) -> TopicResponse:
-    user = getattr(request.state, "user", {}) or {}
-    updated_by = user.get("userId") or user.get("email")
     topic = await service.update_topic(
         org,
         topic_id,
         guidance=body.guidance,
         aliases=body.aliases,
         canonical_name=body.canonical_name,
-        updated_by=updated_by,
+        status=body.status,
+        updated_by=who,
     )
     if topic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found.")
@@ -89,10 +88,11 @@ async def merge_topic(
     topic_id: int,
     body: TopicMergeRequestBody,
     org: str = Depends(org_id),
+    who: Optional[str] = Depends(actor),
     service: TopicService = Depends(topic_service),
 ) -> TopicResponse:
     try:
-        topic = await service.merge_topics(org, topic_id, body.target_id)
+        topic = await service.merge_topics(org, topic_id, body.target_id, actor=who)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if topic is None:

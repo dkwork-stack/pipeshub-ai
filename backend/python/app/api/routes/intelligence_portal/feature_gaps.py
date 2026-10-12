@@ -17,6 +17,10 @@ from app.api.schemas.intelligence_portal import (
     Page,
 )
 from app.config.constants.service import OAuthScopes
+from app.models.intelligence import (  # noqa: TC001 - FastAPI validates query params at runtime
+    AskIntent,
+    TopicStatus,
+)
 
 if TYPE_CHECKING:
     from app.modules.customer_intelligence.queries.services import (
@@ -38,6 +42,8 @@ async def search_feature_gaps(
     source_connector: Optional[str] = Query(None, max_length=64),
     customer_id: Optional[str] = Query(None, max_length=255, description="external_customer_id"),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
+    status: Optional[TopicStatus] = Query(None, description="Lifecycle status"),
+    intent: Optional[AskIntent] = Query(None, description="Only gaps with a mention of this intent"),
     page: Pagination = Depends(pagination),
     org: str = Depends(org_id),
     service: FeatureGapQueryService = Depends(feature_gap_service),
@@ -49,6 +55,8 @@ async def search_feature_gaps(
         source_connector=source_connector,
         external_customer_id=customer_id,
         min_confidence=min_confidence,
+        status=status,
+        intent=intent,
         pagination=page,
     )
 

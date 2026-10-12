@@ -167,10 +167,12 @@ QUERY_PID=""
 PARSING_PID=""
 EXTRACTION_PID=""
 INTELLIGENCE_PID=""
+INTELLIGENCE_WORKER_PID=""
 
 PARSING_PORT=${PARSING_SERVICE_PORT:-8092}
 EXTRACTION_PORT=${EXTRACTION_SERVICE_PORT:-8093}
 INTELLIGENCE_PORT=${INTELLIGENCE_SERVICE_PORT:-8094}
+INTELLIGENCE_WORKER_PORT=${INTELLIGENCE_WORKER_PORT:-8095}
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -352,6 +354,14 @@ start_intelligence() {
     log "Intelligence Portal service started with PID: $INTELLIGENCE_PID"
 }
 
+start_intelligence_worker() {
+    log "Starting Intelligence worker (health port ${INTELLIGENCE_WORKER_PORT})..."
+    cd /app/python
+    INTELLIGENCE_WORKER_PORT=${INTELLIGENCE_WORKER_PORT} python -m app.intelligence_worker_main &
+    INTELLIGENCE_WORKER_PID=$!
+    log "Intelligence worker started with PID: $INTELLIGENCE_WORKER_PID"
+}
+
 check_process() {
     local pid=$1
     local name=$2
@@ -376,6 +386,7 @@ cleanup() {
     [ -n "$PARSING_PID" ] && kill "$PARSING_PID" 2>/dev/null || true
     [ -n "$EXTRACTION_PID" ] && kill "$EXTRACTION_PID" 2>/dev/null || true
     [ -n "$INTELLIGENCE_PID" ] && kill "$INTELLIGENCE_PID" 2>/dev/null || true
+    [ -n "$INTELLIGENCE_WORKER_PID" ] && kill "$INTELLIGENCE_WORKER_PID" 2>/dev/null || true
     
     wait
     log "All services stopped."
@@ -410,9 +421,14 @@ else
 fi
 
 start_indexing
-# Read-only portal over the MySQL intelligence store. Its own health check
-# covers MySQL, so it is not gated on the other services.
+# Portal API over the MySQL intelligence store. Its own health check covers
+# MySQL, so it is not gated on the other services.
 start_intelligence
+# Analyses customer-signal envelopes that indexing publishes when
+# INTELLIGENCE_DISPATCH_MODE=broker; idle otherwise.
+if [ "${INTELLIGENCE_DISPATCH_MODE:-inline}" = "broker" ]; then
+    start_intelligence_worker
+fi
 
 
 log "All services started. Beginning monitoring cycle (checking every ${CHECK_INTERVAL}s)..."
@@ -452,6 +468,10 @@ while true; do
         start_intelligence
     fi
 
+    if [ -n "$INTELLIGENCE_WORKER_PID" ] && ! check_process "$INTELLIGENCE_WORKER_PID" "Intelligence worker"; then
+        start_intelligence_worker
+    fi
+
     if [ "${USE_PARSING_SERVICE:-false}" = "true" ]; then
         if ! check_process "$PARSING_PID" "Parsing"; then
             start_parsing
@@ -473,7 +493,7 @@ RUN chmod +x /app/process_monitor.sh && \
 # releases; it drops to uid 1000 with no capabilities before any service starts.
 COPY --chmod=755 deployment/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-EXPOSE 3000 8002 8092 8093 8094
+EXPOSE 3000 8002 8092 8093 8094 8095
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/app/process_monitor.sh"]

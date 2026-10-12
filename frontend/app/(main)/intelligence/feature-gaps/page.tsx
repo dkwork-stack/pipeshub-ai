@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Flex, Table, Text, Tooltip } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
-import type { FeatureGap } from '../types';
+import type { AskIntent, FeatureGap, TopicStatus } from '../types';
 import { useFeatureGaps, useSourceConnectors } from '../api';
 import {
   Avatar,
@@ -13,15 +13,21 @@ import {
   ErrorState,
   ExportButton,
   FiltersBar,
+  INTENT_LABELS,
   LoadingRows,
   MiniBar,
   PaginationBar,
   PortalHero,
   RowIndexBadge,
   RowMenu,
+  STATUS_OPTIONS,
   ScoreBadge,
+  SelectFilter,
   SortableHeader,
+  StatusBadge,
   SurfacePanel,
+  TrendIndicator,
+  UrgencyBadge,
   exportRowsToCsv,
   formatCount,
   formatMoney,
@@ -35,16 +41,34 @@ import {
 const PAGE_SIZE = 25;
 const SCORE_THRESHOLD = 0.65;
 
-type SortKey = 'feature_name' | 'total_arr_at_stake' | 'total_mrr_at_stake' | 'customer_count' | 'mention_count' | 'score';
+type SortKey =
+  | 'feature_name'
+  | 'total_arr_at_stake'
+  | 'total_mrr_at_stake'
+  | 'customer_count'
+  | 'mention_count'
+  | 'score'
+  | 'recent';
+
+const INTENT_OPTIONS = Object.entries(INTENT_LABELS).map(([value, label]) => ({ value, label }));
 
 function getSortValue(row: FeatureGap, key: SortKey): string | number {
   if (key === 'score') return resolveFeatureGapScore(row);
+  if (key === 'recent') return row.trend?.mentions_last_30d ?? 0;
   return row[key];
+}
+
+/** Most severe urgency present in the gap's evidence, for an at-a-glance column. */
+function topUrgency(gap: FeatureGap): string | null {
+  const mix = gap.trend?.urgencies ?? {};
+  return (['critical', 'high'] as const).find((u) => (mix[u] ?? 0) > 0) ?? null;
 }
 
 export default function FeatureGapsPage() {
   const [query, setQuery] = useState('');
   const [connector, setConnector] = useState('');
+  const [status, setStatus] = useState('');
+  const [intent, setIntent] = useState('');
   const [offset, setOffset] = useState(0);
 
   const debouncedQuery = useDebouncedSearch(query, 300);
@@ -53,6 +77,8 @@ export default function FeatureGapsPage() {
   const { data, error, isLoading, mutate } = useFeatureGaps({
     q: debouncedQuery || undefined,
     source_connector: connector || undefined,
+    status: (status || undefined) as TopicStatus | undefined,
+    intent: (intent || undefined) as AskIntent | undefined,
     limit: PAGE_SIZE,
     offset,
   });
@@ -89,6 +115,11 @@ export default function FeatureGapsPage() {
         { header: 'Customers', accessor: (r: FeatureGap) => r.customer_count },
         { header: 'Mentions', accessor: (r: FeatureGap) => r.mention_count },
         { header: 'Score', accessor: (r: FeatureGap) => r.score },
+        { header: 'Status', accessor: (r: FeatureGap) => r.status ?? 'open' },
+        { header: 'Mentions last 30d', accessor: (r: FeatureGap) => r.trend?.mentions_last_30d ?? '' },
+        { header: 'Mentions prior 30d', accessor: (r: FeatureGap) => r.trend?.mentions_prev_30d ?? '' },
+        { header: 'Churn-risk mentions', accessor: (r: FeatureGap) => r.trend?.churn_risk_count ?? '' },
+        { header: 'Competitors', accessor: (r: FeatureGap) => (r.trend?.competitors ?? []).join('; ') },
         { header: 'Top customers', accessor: (r: FeatureGap) => r.top_customers.join('; ') },
       ],
       sorted,
@@ -109,6 +140,12 @@ export default function FeatureGapsPage() {
         onConnectorChange={resetAnd(setConnector)}
         connectors={connectors ?? []}
         searchPlaceholder="Search feature name…"
+        extra={
+          <>
+            <SelectFilter value={status} onChange={resetAnd(setStatus)} options={STATUS_OPTIONS} allLabel="Any status" width={170} />
+            <SelectFilter value={intent} onChange={resetAnd(setIntent)} options={INTENT_OPTIONS} allLabel="Any ask type" width={200} />
+          </>
+        }
       />
 
       <SurfacePanel
@@ -140,6 +177,9 @@ export default function FeatureGapsPage() {
                 <SortableHeader label="Customers" sortKey="customer_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <SortableHeader label="Score" sortKey="score" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <SortableHeader label="30-day trend" sortKey="recent" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <ColumnHeader>Urgency</ColumnHeader>
+                <ColumnHeader>Status</ColumnHeader>
                 <ColumnHeader>Top customers</ColumnHeader>
                 <ColumnHeader>{null}</ColumnHeader>
               </Table.Row>
@@ -175,6 +215,21 @@ export default function FeatureGapsPage() {
                     <Table.Cell align="right">{formatCount(gap.mention_count)}</Table.Cell>
                     <Table.Cell align="right">
                       <ScoreBadge label={formatScore(normalized)} value={normalized} threshold={SCORE_THRESHOLD} />
+                    </Table.Cell>
+                    <Table.Cell align="right">
+                      <TrendIndicator trend={gap.trend} />
+                    </Table.Cell>
+                    <Table.Cell>
+                      {topUrgency(gap) ? (
+                        <UrgencyBadge urgency={topUrgency(gap) ?? undefined} />
+                      ) : (
+                        <Text size="1" style={{ color: portal.muted }}>
+                          —
+                        </Text>
+                      )}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <StatusBadge status={gap.status} />
                     </Table.Cell>
                     <Table.Cell>
                       {visibleCustomers.length === 0 ? (

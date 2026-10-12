@@ -690,6 +690,15 @@ mysqlIntelligence:
     database: pipeshub_intelligence
     username: pipeshub
     password: ""
+  # Analysis pipeline (docs/customer-intelligence-architecture.md §12).
+  pipeline:
+    # broker: indexing publishes envelopes and the intelligence worker analyses them.
+    dispatchMode: broker
+    sourceRecordTypes: "TICKET,CASE,MEETING"
+    sourceConnectors: ""   # empty = every connector producing those record types
+    workerConcurrency: 4
+    piiRedaction: true
+    retentionDays: ""      # empty = keep evidence until erased
   persistence:
     enabled: true
     size: 10Gi

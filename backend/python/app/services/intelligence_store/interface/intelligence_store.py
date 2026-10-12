@@ -8,17 +8,21 @@ touching ``app/modules/customer_intelligence`` or the intake API.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from app.models.intelligence import (
-    CustomerRevenueSnapshot,
-    FeatureGapMentionRecord,
-    FeatureGapScore,
-    IntelligenceTopic,
-    PainPointMentionRecord,
-    TopicGuidanceUpdate,
-    TopicKind,
-)
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from app.models.intelligence import (
+        AuditEntry,
+        CustomerRevenueSnapshot,
+        ErasureResult,
+        FeatureGapMentionRecord,
+        IntelligenceTopic,
+        PainPointMentionRecord,
+        TopicGuidanceUpdate,
+        TopicKind,
+    )
 
 
 class IIntelligenceStore(ABC):
@@ -47,8 +51,14 @@ class IIntelligenceStore(ABC):
         ...
 
     @abstractmethod
-    async def upsert_feature_gap_mention(self, mention: FeatureGapMentionRecord) -> None:
-        """Idempotently record one (customer, feature_gap, source event) mention."""
+    async def upsert_feature_gap_mention(
+        self, mention: FeatureGapMentionRecord, *, recompute: bool = True
+    ) -> None:
+        """Idempotently record one (customer, feature_gap, source event) mention.
+
+        ``recompute=False`` lets a caller writing many mentions recompute the
+        touched scores once afterwards.
+        """
         ...
 
     @abstractmethod
@@ -74,6 +84,25 @@ class IIntelligenceStore(ABC):
         ...
 
     @abstractmethod
+    async def add_topic_alias(self, org_id: str, topic_id: int, alias: str) -> None:
+        """Remember another phrasing of a topic (no-op if already known)."""
+        ...
+
+    @abstractmethod
+    async def get_topic_embeddings(
+        self, org_id: str, model: str
+    ) -> dict[int, tuple[str, list[float]]]:
+        """Cached ``topic_id -> (text_hash, vector)`` for one embedding model."""
+        ...
+
+    @abstractmethod
+    async def upsert_topic_embedding(
+        self, org_id: str, topic_id: int, model: str, text_hash: str, vector: list[float]
+    ) -> None:
+        """Cache a topic's vector for one embedding model."""
+        ...
+
+    @abstractmethod
     async def update_topic_guidance(
         self, org_id: str, topic_id: int, update_payload: TopicGuidanceUpdate
     ) -> Optional[IntelligenceTopic]:
@@ -96,25 +125,31 @@ class IIntelligenceStore(ABC):
         ...
 
     @abstractmethod
-    async def list_feature_gap_scores(
-        self, org_id: str, limit: int = 50, offset: int = 0
-    ) -> list[FeatureGapScore]:
-        """List feature gaps ranked by score, descending."""
+    async def list_org_ids(self) -> list[str]:
+        """Every org with data (retention jobs iterate these)."""
         ...
 
     @abstractmethod
-    async def get_feature_gap_detail(
-        self, org_id: str, feature_name: str
-    ) -> tuple[FeatureGapScore | None, list[FeatureGapMentionRecord]]:
-        """Return the score plus every citation-carrying mention for one feature gap."""
+    async def record_audit(self, entry: AuditEntry) -> None:
+        """Append one privileged action to the audit trail."""
         ...
 
     @abstractmethod
-    async def get_customer_detail(self, org_id: str, external_customer_id: str) -> dict:
-        """Return customer profile: latest revenue snapshot + its feature-gap mentions."""
+    async def list_audit(self, org_id: str, limit: int = 50, offset: int = 0) -> tuple[list[AuditEntry], int]:
+        """Newest-first audit entries plus the total count."""
         ...
 
     @abstractmethod
-    async def list_customers(self, org_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
-        """List customers with their latest revenue snapshot."""
+    async def erase_customer(self, org_id: str, external_customer_id: str) -> ErasureResult:
+        """GDPR Art. 17: delete a customer with its mentions and revenue; recompute scores."""
+        ...
+
+    @abstractmethod
+    async def erase_source_record(self, org_id: str, source_record_id: str) -> ErasureResult:
+        """Delete every mention derived from one source record; recompute scores."""
+        ...
+
+    @abstractmethod
+    async def purge_mentions_before(self, org_id: str, cutoff: datetime) -> ErasureResult:
+        """Retention: delete evidence older than ``cutoff``; recompute scores."""
         ...

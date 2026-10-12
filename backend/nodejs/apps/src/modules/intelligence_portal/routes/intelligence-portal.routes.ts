@@ -2,8 +2,9 @@
  * Intelligence Portal Routes
  *
  * Auth/scope-gated proxy in front of the Python intelligence service
- * (`/api/v1/intelligence-portal`). Read-only: the intake/write surface stays
- * on the indexing service (`/api/v1/intelligence`).
+ * (`/api/v1/intelligence-portal`). Reads need `intelligence:read`; topic
+ * curation, GDPR erasure and the audit log need `intelligence:write`. Signal
+ * intake stays on the indexing service (`/api/v1/intelligence`).
  *
  * @module intelligence_portal/routes
  */
@@ -28,6 +29,9 @@ import {
   mergeTopic,
   searchCustomers,
   getCustomer,
+  eraseCustomer,
+  eraseSourceRecord,
+  getAuditLog,
   getHealth,
 } from '../controller/intelligence-portal.controller';
 
@@ -116,6 +120,20 @@ export function createIntelligencePortalRouter(container: Container): Router {
     read,
     getCustomer(appConfig),
   );
+  router.delete(
+    '/customers/:externalCustomerId',
+    authMiddleware.authenticate,
+    write,
+    eraseCustomer(appConfig),
+  );
+
+  router.delete(
+    '/records/:recordId',
+    authMiddleware.authenticate,
+    write,
+    eraseSourceRecord(appConfig),
+  );
+  router.get('/audit', authMiddleware.authenticate, write, getAuditLog(appConfig));
 
   return router;
 }

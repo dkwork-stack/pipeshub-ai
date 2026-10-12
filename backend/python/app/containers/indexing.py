@@ -115,6 +115,16 @@ class IndexingAppContainer(BaseAppContainer):
         logger=logger,
         intelligence_store=intelligence_store,
         extraction_client=extraction_client,
+        config_service=config_service,
+    )
+
+    # Normalises indexed records into signal envelopes and dispatches them
+    # (INTELLIGENCE_DISPATCH_MODE=broker -> intelligence worker; inline -> here).
+    customer_intelligence_feeder = providers.Resource(
+        container_utils.create_customer_intelligence_feeder,
+        logger=logger,
+        config_service=config_service,
+        analysis_service_provider=customer_intelligence_ingestion_service.provider,
     )
 
     entity_vector_store = providers.Resource(
@@ -148,7 +158,7 @@ class IndexingAppContainer(BaseAppContainer):
         config_service=config_service,
         # The provider, not the value: the factory resolves it lazily so a MySQL
         # outage degrades to "no intelligence" instead of failing indexing startup.
-        customer_intelligence_provider=customer_intelligence_ingestion_service.provider,
+        customer_intelligence_provider=customer_intelligence_feeder.provider,
         entity_vector_store=entity_vector_store,
         entity_resolver=entity_resolver,
     )

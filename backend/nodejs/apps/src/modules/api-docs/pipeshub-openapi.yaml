@@ -16377,13 +16377,136 @@ components:
           example: freshdesk
         source_type:
           type: string
-          enum: [support_ticket, crm_note, call_transcript, document_upload]
+          enum: [support_ticket, crm_note, call_transcript, document_upload, email, chat]
         external_event_id:
           type: string
         citation_url:
           type: string
           nullable: true
         occurred_at:
+          type: string
+          format: date-time
+        sentiment:
+          type: string
+          enum: [Positive, Neutral, Negative]
+        tone:
+          type: string
+          enum: [frustrated, angry, anxious, neutral, appreciative]
+        urgency:
+          type: string
+          enum: [low, medium, high, critical]
+        intent:
+          type: string
+          enum: [feature_request, bug, usability, performance, integration, pricing, compliance_security, other]
+        speaker_role:
+          type: string
+          enum: [customer, agent, unknown]
+        product_area:
+          type: string
+          nullable: true
+        business_impact:
+          type: string
+          nullable: true
+          description: Stated consequence, e.g. "blocking rollout to 300 seats"
+        workaround:
+          type: string
+          nullable: true
+        competitor:
+          type: string
+          nullable: true
+        churn_risk:
+          type: boolean
+        source_record_id:
+          type: string
+          nullable: true
+          description: PipesHub record the evidence came from (lineage and erasure key)
+        extraction_model:
+          type: string
+          nullable: true
+        prompt_version:
+          type: string
+          nullable: true
+    IntelligenceTrend:
+      type: object
+      description: Recency and qualitative mix of a topic's evidence
+      properties:
+        first_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        mentions_last_30d:
+          type: integer
+        mentions_prev_30d:
+          type: integer
+        negative_share:
+          type: number
+        high_urgency_count:
+          type: integer
+        churn_risk_count:
+          type: integer
+        competitors:
+          type: array
+          items:
+            type: string
+        tones:
+          type: object
+          additionalProperties:
+            type: integer
+        urgencies:
+          type: object
+          additionalProperties:
+            type: integer
+    IntelligenceCustomerHealth:
+      type: object
+      properties:
+        negative_share:
+          type: number
+        churn_risk_count:
+          type: integer
+        high_urgency_count:
+          type: integer
+        last_touch_at:
+          type: string
+          format: date-time
+          nullable: true
+        competitors:
+          type: array
+          items:
+            type: string
+        at_risk:
+          type: boolean
+    IntelligenceErasure:
+      type: object
+      description: Rows removed by an erasure request
+      properties:
+        customers:
+          type: integer
+        feature_gap_mentions:
+          type: integer
+        pain_point_mentions:
+          type: integer
+        revenue_snapshots:
+          type: integer
+    IntelligenceAuditEntry:
+      type: object
+      properties:
+        actor:
+          type: string
+          nullable: true
+        action:
+          type: string
+          example: erasure.customer
+        target_type:
+          type: string
+        target_id:
+          type: string
+        details:
+          type: object
+        created_at:
           type: string
           format: date-time
     IntelligenceFeatureGap:
@@ -16417,6 +16540,13 @@ components:
         low_confidence_count:
           type: integer
           default: 0
+        status:
+          type: string
+          enum: [open, under_review, planned, in_progress, shipped, declined]
+        trend:
+          allOf:
+            - $ref: '#/components/schemas/IntelligenceTrend'
+          nullable: true
     IntelligencePainPoint:
       type: object
       required: [topic_name, customer_count, mention_count, max_confidence]
@@ -16439,6 +16569,13 @@ components:
           type: array
           items:
             type: string
+        status:
+          type: string
+          enum: [open, under_review, planned, in_progress, shipped, declined]
+        trend:
+          allOf:
+            - $ref: '#/components/schemas/IntelligenceTrend'
+          nullable: true
     IntelligencePainPointMention:
       type: object
       required: [external_customer_id, topic_name, summary, confidence, source_connector, source_type, external_event_id, occurred_at]
@@ -16448,8 +16585,6 @@ components:
         topic_name:
           type: string
         summary:
-          type: string
-        sentiment:
           type: string
         confidence:
           type: number
@@ -16467,6 +16602,46 @@ components:
         occurred_at:
           type: string
           format: date-time
+        sentiment:
+          type: string
+          enum: [Positive, Neutral, Negative]
+        tone:
+          type: string
+          enum: [frustrated, angry, anxious, neutral, appreciative]
+        urgency:
+          type: string
+          enum: [low, medium, high, critical]
+        intent:
+          type: string
+          enum: [feature_request, bug, usability, performance, integration, pricing, compliance_security, other]
+        speaker_role:
+          type: string
+          enum: [customer, agent, unknown]
+        product_area:
+          type: string
+          nullable: true
+        business_impact:
+          type: string
+          nullable: true
+          description: Stated consequence, e.g. "blocking rollout to 300 seats"
+        workaround:
+          type: string
+          nullable: true
+        competitor:
+          type: string
+          nullable: true
+        churn_risk:
+          type: boolean
+        source_record_id:
+          type: string
+          nullable: true
+          description: PipesHub record the evidence came from (lineage and erasure key)
+        extraction_model:
+          type: string
+          nullable: true
+        prompt_version:
+          type: string
+          nullable: true
     IntelligencePainPointDetail:
       allOf:
         - $ref: '#/components/schemas/IntelligencePainPoint'
@@ -16498,6 +16673,12 @@ components:
         guidance:
           type: string
           nullable: true
+        description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [open, under_review, planned, in_progress, shipped, declined]
         merged_into_id:
           type: integer
           nullable: true
@@ -16524,6 +16705,11 @@ components:
             type: string
         canonical_name:
           type: string
+          minLength: 1
+          maxLength: 191
+        status:
+          type: string
+          enum: [open, under_review, planned, in_progress, shipped, declined]
     IntelligenceAffectedCustomer:
       type: object
       required: [external_customer_id, customer_name, arr, mrr, mention_count]
@@ -16565,12 +16751,18 @@ components:
           nullable: true
         feature_gap_count:
           type: integer
+        pain_point_count:
+          type: integer
         mention_count:
           type: integer
         top_insights:
           type: array
           items:
             $ref: '#/components/schemas/IntelligenceInsight'
+        health:
+          allOf:
+            - $ref: '#/components/schemas/IntelligenceCustomerHealth'
+          nullable: true
     IntelligenceCustomerDetail:
       allOf:
         - $ref: '#/components/schemas/IntelligenceCustomer'
@@ -16654,6 +16846,26 @@ components:
             Latest ingestion timestamp across feature-gap and pain-point mentions
             (when evidence was written into the intelligence store), not the
             source event's original occurred_at.
+        pain_point_count:
+          type: integer
+        emerging_feature_gaps:
+          type: array
+          description: Gaps whose last-30-day mentions outpace the prior 30 days
+          items:
+            $ref: '#/components/schemas/IntelligenceFeatureGap'
+        at_risk_customers:
+          type: array
+          description: Customers with churn-risk evidence or mostly negative sentiment, by ARR
+          items:
+            $ref: '#/components/schemas/IntelligenceCustomer'
+        intent_mix:
+          type: object
+          additionalProperties:
+            type: integer
+        tone_mix:
+          type: object
+          additionalProperties:
+            type: integer
 
 security:
   - bearerAuth: []
@@ -44869,6 +45081,18 @@ paths:
             minimum: 0
             maximum: 1
           description: Only gaps with at least one mention at or above this confidence
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, under_review, planned, in_progress, shipped, declined]
+          description: Only topics in this lifecycle status
+        - name: intent
+          in: query
+          schema:
+            type: string
+            enum: [feature_request, bug, usability, performance, integration, pricing, compliance_security, other]
+          description: Only gaps with at least one mention of this intent
         - name: limit
           in: query
           schema:
@@ -44976,6 +45200,12 @@ paths:
             type: number
             minimum: 0
             maximum: 1
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, under_review, planned, in_progress, shipped, declined]
+          description: Only topics in this lifecycle status
         - name: limit
           in: query
           schema:
@@ -45197,6 +45427,12 @@ paths:
           schema:
             type: string
           description: Only customers with a mention from this connector
+        - name: at_risk
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Only customers with churn-risk evidence or mostly negative sentiment
         - name: limit
           in: query
           schema:
@@ -45261,3 +45497,103 @@ paths:
           description: Unauthorized
         '404':
           description: Customer not found in the caller's organization
+    delete:
+      tags:
+        - Customer Feature Intelligence
+      summary: Erase a customer (GDPR Art. 17)
+      description: Deletes the customer, all of its evidence and revenue history, recomputes scores, and writes an audit entry.
+      operationId: eraseIntelligenceCustomer
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:write]
+      parameters:
+        - name: externalCustomerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rows removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceErasure'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Missing intelligence:write
+        '404':
+          description: Customer not found in the caller's organization
+
+  /intelligence-portal/records/{recordId}:
+    delete:
+      tags:
+        - Customer Feature Intelligence
+      summary: Erase evidence derived from one source record
+      description: Deletes every mention extracted from a PipesHub record (e.g. a deleted ticket or upload), recomputes scores, and writes an audit entry.
+      operationId: eraseIntelligenceSourceRecord
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:write]
+      parameters:
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rows removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntelligenceErasure'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Missing intelligence:write
+
+  /intelligence-portal/audit:
+    get:
+      tags:
+        - Customer Feature Intelligence
+      summary: Audit log
+      description: Newest-first record of topic edits, merges and erasures in the caller's organization.
+      operationId: getIntelligenceAuditLog
+      security:
+        - bearerAuth: []
+        - oauth2: [intelligence:write]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Page of audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntelligenceAuditEntry'
+                  page:
+                    $ref: '#/components/schemas/IntelligencePageMeta'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Missing intelligence:write

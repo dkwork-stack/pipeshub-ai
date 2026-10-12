@@ -33,6 +33,7 @@ class Topic(str, Enum):
     SYNC_EVENTS = "sync-events"
     HEALTH_CHECK = "health-check"
     NOTIFICATION = "notification"
+    INTELLIGENCE_EVENTS = "intelligence-events"
 
 
 REQUIRED_TOPICS: list[str] = [t.value for t in Topic]

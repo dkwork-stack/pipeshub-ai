@@ -15,6 +15,8 @@ export enum BrokerTopic {
   TOKEN_EVENTS = 'token-events',
   NOTIFICATION = 'notification',
   MAIL_EVENTS = 'mail-events',
+  // Customer Feature Intelligence signal envelopes (indexing -> intelligence worker).
+  INTELLIGENCE_EVENTS = 'intelligence-events',
 }
 
 /**
@@ -32,6 +34,7 @@ export interface BrokerTopicPayloadMap {
   [BrokerTopic.TOKEN_EVENTS]: Record<string, unknown>;
   [BrokerTopic.NOTIFICATION]: Record<string, unknown>;
   [BrokerTopic.MAIL_EVENTS]: Record<string, unknown>;
+  [BrokerTopic.INTELLIGENCE_EVENTS]: Record<string, unknown>;
 }
 
 export interface MessageBrokerConfig {

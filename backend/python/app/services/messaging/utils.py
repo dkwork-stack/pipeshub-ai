@@ -6,6 +6,7 @@ creating appropriate configs for either Kafka or Redis Streams.
 from __future__ import annotations
 
 import os
+import socket
 import uuid
 from typing import TYPE_CHECKING
 
@@ -294,6 +295,27 @@ class MessagingUtils:
             lane_topics_for(Topic.RECORD_EVENTS.value, broker_type),
             is_indexing=True,  # Use indexing batch size
         )
+
+    @staticmethod
+    async def create_intelligence_consumer_config(
+        app_container: AppContainer,
+    ) -> KafkaConsumerConfig | RedisStreamsConfig:
+        """Customer Feature Intelligence worker: one shared group, so each
+        envelope is analysed once across all worker replicas.
+
+        The client id is per host and stable across restarts (Redis Streams
+        keys the pending-entries list by consumer name; see the sync config).
+        """
+        config = await MessagingUtils.create_consumer_config(
+            app_container,
+            os.getenv("INTELLIGENCE_WORKER_ID") or f"intelligence_consumer_{socket.gethostname()}",
+            "intelligence_consumer_group",
+            [Topic.INTELLIGENCE_EVENTS.value],
+        )
+        if isinstance(config, KafkaConsumerConfig):
+            # An LLM call outlives the poll interval; only commit once handled.
+            config.enable_auto_commit = False
+        return config
 
     @staticmethod
     async def create_aiconfig_consumer_config(

@@ -6,6 +6,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { Mention } from '../types';
 import { ConfidenceBadge } from './confidence-badge';
 import { formatConnectorLabel, SourceConnectorIcon } from './connector-display';
+import { ImpactLines, SignalChips } from './signal-badges';
 import { formatDate } from './format';
 import { ColumnHeader } from './sortable-header';
 import { EmptyState } from './states';
@@ -76,6 +77,8 @@ export function MentionsTable({
                     “{m.excerpt}”
                   </Text>
                 ) : null}
+                <ImpactLines evidence={m} />
+                <SignalChips evidence={m} />
               </Flex>
             </Table.Cell>
             <Table.Cell>

@@ -21,8 +21,10 @@ import {
   LoadingRows,
   PortalHero,
   StatStrip,
+  StatusControl,
   SurfacePanel,
   TopicGuidancePanel,
+  TopicSignals,
   formatConfidence,
   formatCount,
   formatMoney,
@@ -69,6 +71,7 @@ function FeatureGapDetailContent() {
         eyebrow="Feature gap"
         title={featureName}
         subtitle="Who is asking for this, how much revenue it represents, and the evidence behind it."
+        actions={<StatusControl kind="feature_gap" canonicalName={featureName} onChanged={() => void mutate()} />}
       />
 
       {notFound ? (
@@ -94,6 +97,10 @@ function FeatureGapDetailContent() {
               },
             ]}
           />
+
+          <SurfacePanel title="How customers talk about it" icon="insights">
+            <TopicSignals trend={data.trend} />
+          </SurfacePanel>
 
           <SurfacePanel title="Extraction guidance">
             <TopicGuidancePanel kind="feature_gap" canonicalName={featureName} />

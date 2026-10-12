@@ -17,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 
 from app.api.routes.intelligence import router
-from app.models.intelligence import CustomerRevenueSnapshot, FeatureGapScore
+from app.models.intelligence import CustomerRevenueSnapshot
 
 ORG_ID = "org-123"
 OTHER_ORG_ID = "org-456"
@@ -36,68 +36,20 @@ class _FakeIngestionService:
         self.ingested_snapshots.append(snapshot)
 
 
-class _FakeIntelligenceStore:
-    async def list_feature_gap_scores(
-        self, org_id: str, limit: int = 50, offset: int = 0
-    ) -> list[FeatureGapScore]:
-        return [
-            FeatureGapScore(
-                org_id=org_id,
-                feature_name="Bulk CSV export",
-                total_arr_at_stake=120_000.0,
-                total_mrr_at_stake=10_000.0,
-                customer_count=3,
-                mention_count=5,
-                score=987.65,
-                top_customers=["Acme Corp"],
-            )
-        ]
-
-    async def get_feature_gap_detail(
-        self, org_id: str, feature_name: str
-    ) -> tuple[FeatureGapScore | None, list[Any]]:
-        if feature_name != "Bulk CSV export":
-            return None, []
-        score = FeatureGapScore(
-            org_id=org_id,
-            feature_name=feature_name,
-            total_arr_at_stake=120_000.0,
-            total_mrr_at_stake=10_000.0,
-            customer_count=3,
-            mention_count=5,
-            score=987.65,
-        )
-        return score, []
-
-    async def list_customers(
-        self, org_id: str, limit: int = 50, offset: int = 0
-    ) -> list[dict[str, Any]]:
-        return [{"customer": {"external_customer_id": "cust-1", "customer_name": "Acme Corp"}}]
-
-    async def get_customer_detail(self, org_id: str, external_customer_id: str) -> dict[str, Any]:
-        if external_customer_id != "cust-1":
-            return {"customer": None}
-        return {"customer": {"external_customer_id": external_customer_id}, "latest_revenue_snapshot": None, "feature_gap_mentions": []}
-
-
 class _FakeContainer:
-    def __init__(self, ingestion_service: "_FakeIngestionService", store: _FakeIntelligenceStore) -> None:
+    def __init__(self, ingestion_service: "_FakeIngestionService") -> None:
         self._ingestion_service = ingestion_service
-        self._store = store
 
     async def customer_intelligence_ingestion_service(self) -> "_FakeIngestionService":
         return self._ingestion_service
 
-    async def intelligence_store(self) -> _FakeIntelligenceStore:
-        return self._store
 
-
-def _make_app(user: dict | None) -> tuple[FastAPI, _FakeIngestionService, _FakeIntelligenceStore]:
+def _make_app(user: dict | None) -> tuple[FastAPI, _FakeIngestionService, None]:
     app = FastAPI()
     app.include_router(router)
     ingestion_service = _FakeIngestionService()
-    store = _FakeIntelligenceStore()
-    app.container = _FakeContainer(ingestion_service, store)
+    store = None
+    app.container = _FakeContainer(ingestion_service)
 
     class _InjectUserMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -119,10 +71,25 @@ def _authed_user(org_id: str = ORG_ID) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_read_route_without_authenticated_user_is_rejected() -> None:
+def _event(org_id: str = ORG_ID) -> dict[str, Any]:
+    return {
+        "org_id": org_id,
+        "source_connector": "freshdesk",
+        "source_type": "support_ticket",
+        "external_customer_id": "cust-1",
+        "customer_name": "Acme Corp",
+        "external_event_id": "t-1",
+        "turns": [
+            {"role": "customer", "author": "Jane", "text": "We need SSO before rollout."},
+            {"role": "agent", "text": "SSO is not available yet."},
+        ],
+    }
+
+
+def test_event_route_without_authenticated_user_is_rejected() -> None:
     app, _, _ = _make_app(user=None)
     client = TestClient(app)
-    resp = client.get("/api/v1/intelligence/feature-gaps")
+    resp = client.post("/api/v1/intelligence/events", json=_event())
     assert resp.status_code == 401
 
 
@@ -144,11 +111,12 @@ def test_write_route_without_authenticated_user_is_rejected() -> None:
 
 
 def test_oauth_token_missing_required_scope_is_forbidden() -> None:
-    user = {"orgId": ORG_ID, "isOAuth": True, "oauthScopes": ["some:other:scope"]}
-    app, _, _ = _make_app(user=user)
+    user = {"orgId": ORG_ID, "isOAuth": True, "oauthScopes": ["intelligence:read"]}
+    app, ingestion_service, _ = _make_app(user=user)
     client = TestClient(app)
-    resp = client.get("/api/v1/intelligence/feature-gaps")
+    resp = client.post("/api/v1/intelligence/events", json=_event())
     assert resp.status_code == 403
+    assert ingestion_service.ingested_events == []
 
 
 # ---------------------------------------------------------------------------
@@ -179,30 +147,29 @@ def test_ingest_revenue_snapshot_accepts_matching_org_id() -> None:
     assert len(ingestion_service.ingested_snapshots) == 1
 
 
-# ---------------------------------------------------------------------------
-# Read endpoints: happy path + 404s
-# ---------------------------------------------------------------------------
+def test_ingest_event_rejects_mismatched_org_id() -> None:
+    app, ingestion_service, _ = _make_app(user=_authed_user(ORG_ID))
+    resp = TestClient(app).post("/api/v1/intelligence/events", json=_event(OTHER_ORG_ID))
+    assert resp.status_code == 403
+    assert ingestion_service.ingested_events == []
 
 
-def test_list_feature_gaps_returns_scores() -> None:
-    app, _, _ = _make_app(user=_authed_user(ORG_ID))
-    client = TestClient(app)
-    resp = client.get("/api/v1/intelligence/feature-gaps")
+def test_ingest_event_accepts_conversation_turns() -> None:
+    app, ingestion_service, _ = _make_app(user=_authed_user(ORG_ID))
+    resp = TestClient(app).post("/api/v1/intelligence/events", json=_event())
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-    assert body["feature_gaps"][0]["feature_name"] == "Bulk CSV export"
+    (event,) = ingestion_service.ingested_events
+    assert event.text == "[Customer · Jane]: We need SSO before rollout.\n\n[Agent]: SSO is not available yet."
 
 
-def test_get_feature_gap_detail_404_for_unknown_feature() -> None:
+def test_ingest_event_without_text_or_turns_is_rejected() -> None:
     app, _, _ = _make_app(user=_authed_user(ORG_ID))
-    client = TestClient(app)
-    resp = client.get("/api/v1/intelligence/feature-gaps/unknown-feature")
-    assert resp.status_code == 404
+    body = _event()
+    body.pop("turns")
+    resp = TestClient(app).post("/api/v1/intelligence/events", json=body)
+    assert resp.status_code == 422
 
 
-def test_get_customer_detail_404_for_unknown_customer() -> None:
+def test_legacy_read_routes_are_gone() -> None:
     app, _, _ = _make_app(user=_authed_user(ORG_ID))
-    client = TestClient(app)
-    resp = client.get("/api/v1/intelligence/customers/unknown-customer")
-    assert resp.status_code == 404
+    assert TestClient(app).get("/api/v1/intelligence/feature-gaps").status_code in (404, 405)

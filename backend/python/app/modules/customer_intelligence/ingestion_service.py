@@ -1,14 +1,14 @@
-"""Customer Feature Intelligence ingestion service.
+"""Customer Feature Intelligence analysis service.
 
-Connector-agnostic core: any connector (existing pipeshub connector or a new
-one) maps its data to ``CustomerSignalEvent`` / ``CustomerRevenueSnapshot``
-and calls this service — directly in-process (indexing service) or via the
-intake API (``app/api/routes/intelligence.py``) for out-of-process adapters.
-Nothing here is aware of Freshdesk, Salesforce, or Chargebee specifically.
+Connector-agnostic core: every source arrives as a ``SignalEnvelope`` — from
+the intelligence worker (broker mode), from the indexing process (inline
+mode) or from the intake API. Nothing here knows which connector produced it.
 
-Knowledge Base uploads are the one in-process source: ``SinkOrchestrator``
-calls :meth:`ingest_indexed_record` once a record is searchable, so a CSV/PDF
-dropped into the UI lands in MySQL without a separate script.
+Per envelope: redact PII → extract (LLM, via the extraction service) →
+verify quotes → dedupe → [per-org critical section: classify against known
+topics → resolve customer → write mentions → recompute touched scores].
+Only the short critical section is serialised per org, so extraction for many
+envelopes of one org still runs concurrently.
 
 ARR/MRR is revenue-only: written from allowlisted sources (file upload,
 billing) via :meth:`ingest_revenue_snapshot`. Signal connectors only identify
@@ -17,13 +17,10 @@ customers.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+import threading
+from typing import TYPE_CHECKING, Optional
 
-from app.config.constants.arangodb import Connectors
-from app.models.blocks import BlockType
 from app.models.intelligence import (
     CustomerRevenueSnapshot,
     CustomerSignalEvent,
@@ -31,34 +28,48 @@ from app.models.intelligence import (
     FeatureIntelligenceExtractionResult,
     IntelligenceTopic,
     PainPointMentionRecord,
-    SignalSourceType,
     TaxonomyHint,
     TopicKind,
 )
+from app.modules.customer_intelligence.matching.matcher import (
+    ITopicMatcher,
+    LexicalTopicMatcher,
+)
 from app.modules.customer_intelligence.pipeline import run_pipeline
 from app.modules.customer_intelligence.pipeline.context import ExtractionContext
-from app.modules.customer_intelligence.pipeline.stages import match_known_customer
+from app.modules.customer_intelligence.pipeline.stages import (
+    CanonicalizeToTopic,
+    DedupeWithinEvent,
+    ResolveCustomer,
+    VerifyExcerpts,
+    match_known_customer,
+)
 from app.modules.customer_intelligence.revenue import (
+    RevenueFields,
     is_revenue_source,
     parse_revenue_fields,
+)
+from app.modules.customer_intelligence.signals.envelope import SignalEnvelope
+from app.modules.customer_intelligence.signals.normalizers import (
+    UPLOAD_SOURCE_CONNECTOR,
+)
+from app.modules.customer_intelligence.signals.redaction import (
+    IPiiRedactor,
+    NoopRedactor,
 )
 
 if TYPE_CHECKING:
     from logging import Logger
 
-    from app.models.entities import Record
     from app.services.extraction.client import ExtractionClient
     from app.services.intelligence_store.interface.intelligence_store import (
         IIntelligenceStore,
     )
 
-_KB_GROUP_TYPE = "KB"  # RecordGroupType.KB; kept as a literal so this module stays import-light
+__all__ = ["UPLOAD_SOURCE_CONNECTOR", "CustomerIntelligenceIngestionService"]
 
-UPLOAD_SOURCE_CONNECTOR = "file_upload"
-# Each row is one LLM call; this keeps a large export from holding an indexing
-# permit for the whole RECORD_PROCESSING_TIMEOUT budget.
-_DEFAULT_UPLOAD_MAX_ROWS = 200
-_DEFAULT_UPLOAD_CONCURRENCY = 4
+UNATTRIBUTED_CUSTOMER = "Unattributed"
+_PROMPT_TOPIC_HINTS = 60
 
 
 def _slugify(value: str) -> str:
@@ -71,49 +82,95 @@ class CustomerIntelligenceIngestionService:
         logger: Logger,
         intelligence_store: IIntelligenceStore,
         extraction_client: ExtractionClient,
+        topic_matcher: Optional[ITopicMatcher] = None,
+        redactor: Optional[IPiiRedactor] = None,
     ) -> None:
         self.logger = logger
         self.intelligence_store = intelligence_store
         self.extraction_client = extraction_client
+        self.topic_matcher = topic_matcher or LexicalTopicMatcher()
+        self.redactor = redactor or NoopRedactor()
+        self._locks: dict[tuple[asyncio.AbstractEventLoop, str], asyncio.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    # ------------------------------------------------------------ entry points
 
     async def ingest_signal_event(self, event: CustomerSignalEvent) -> int:
-        """Run pain-point/feature-gap inference on one event and persist mentions.
-
-        Returns the number of feature-gap + pain-point mentions written (0 is a
-        valid, common outcome — most tickets/notes don't raise a product gap).
-        """
+        """Intake API: an event whose customer is already known."""
         await self.intelligence_store.upsert_customer(
             event.org_id, event.external_customer_id, event.customer_name
         )
+        return await self.analyze(SignalEnvelope.from_event(event))
 
-        taxonomy, hints, known_customers = await self._load_prompt_context(event.org_id)
+    async def analyze(self, envelope: SignalEnvelope) -> int:
+        """Run one envelope through the pipeline; returns mentions written.
+
+        0 is a valid, common outcome — most tickets don't raise a product gap.
+        """
+        envelope = self._redacted(envelope)
+        text = envelope.text
+        revenue = (
+            parse_revenue_fields(envelope.cells if envelope.cells is not None else text)
+            if is_revenue_source(envelope.source_connector)
+            else None
+        )
+
+        taxonomy, known_customers = await self._prompt_context(envelope.org_id)
+        hints = await self._topic_hints(envelope.org_id, text, taxonomy)
         result = await self.extraction_client.extract_feature_intelligence(
-            text=event.text,
-            org_id=event.org_id,
+            text=text,
+            org_id=envelope.org_id,
+            infer_customer=envelope.infer_customer,
             taxonomy=hints,
-            known_customers=[name for _, name in known_customers],
+            known_customers=[name for _, name in known_customers] if envelope.infer_customer else [],
+        ) or FeatureIntelligenceExtractionResult()
+
+        ctx = await run_pipeline(
+            self._context(envelope, text, result, taxonomy, known_customers),
+            [VerifyExcerpts(), DedupeWithinEvent()],
         )
-        ctx = await self._run_stages(
-            org_id=event.org_id,
-            text=event.text,
-            result=result,
-            taxonomy=taxonomy,
-            hints=hints,
-            known_customers=known_customers,
-            resolved_customer_id=event.external_customer_id,
-            resolved_customer_name=event.customer_name,
-        )
-        if ctx.resolved_customer_id and ctx.resolved_customer_name:
-            event = event.model_copy(
-                update={
-                    "external_customer_id": ctx.resolved_customer_id,
-                    "customer_name": ctx.resolved_customer_name,
-                }
+        if ctx.dropped:
+            self.logger.debug(
+                "Envelope %s: dropped %s", envelope.external_event_id,
+                [(d.code.value, d.name) for d in ctx.dropped],
             )
-            await self.intelligence_store.upsert_customer(
-                event.org_id, event.external_customer_id, event.customer_name
-            )
-        return await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
+        has_mentions = bool(ctx.result.feature_gaps or ctx.result.pain_points)
+        if not has_mentions and revenue is None:
+            return 0
+
+        async with self._org_lock(envelope.org_id):
+            # Topics may have been created by other envelopes while this one was
+            # with the LLM; classify against the current set.
+            taxonomy, known_customers = await self._prompt_context(envelope.org_id)
+            ctx.taxonomy = taxonomy
+            ctx.known_customers = known_customers
+            if revenue is not None and revenue.customer_name and not ctx.resolved_customer_name:
+                # A named customer column beats the LLM's reading of the row.
+                ctx.resolved_customer_name = revenue.customer_name
+            ctx = await run_pipeline(ctx, [CanonicalizeToTopic(self.topic_matcher), ResolveCustomer()])
+
+            customer_id, customer_name = self._attribution(envelope, ctx, revenue)
+            await self.intelligence_store.upsert_customer(envelope.org_id, customer_id, customer_name)
+
+            if revenue is not None:
+                await self.ingest_revenue_snapshot(
+                    CustomerRevenueSnapshot(
+                        org_id=envelope.org_id,
+                        source_connector=envelope.source_connector,
+                        external_customer_id=customer_id,
+                        customer_name=customer_name,
+                        mrr=revenue.mrr,
+                        arr=revenue.arr,
+                        snapshot_at=envelope.occurred_at,
+                    ),
+                    recompute_scores=not has_mentions,
+                )
+            if not has_mentions:
+                return 0
+
+            for topic_id, alias in ctx.alias_proposals:
+                await self.intelligence_store.add_topic_alias(envelope.org_id, topic_id, alias)
+            return await self._write_mentions(envelope, customer_id, ctx, result)
 
     async def ingest_revenue_snapshot(
         self,
@@ -152,340 +209,162 @@ class CustomerIntelligenceIngestionService:
             snapshot.customer_name, snapshot.arr,
         )
 
-    # ------------------------------------------------------------------
-    # Knowledge Base uploads (in-process, called from SinkOrchestrator)
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------- helpers
+
+    def _org_lock(self, org_id: str) -> asyncio.Lock:
+        # asyncio locks are loop-bound; indexing (inline mode) runs records on
+        # a worker-thread loop distinct from the API loop.
+        key = (asyncio.get_running_loop(), org_id)
+        with self._locks_guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = self._locks[key] = asyncio.Lock()
+            return lock
+
+    def _redacted(self, envelope: SignalEnvelope) -> SignalEnvelope:
+        if isinstance(self.redactor, NoopRedactor):
+            return envelope
+        # Role labels carry the context the LLM needs; personal names do not.
+        turns = [t.model_copy(update={"text": self.redactor.redact(t.text), "author": None}) for t in envelope.turns]
+        cells = (
+            {k: self.redactor.redact(v) if isinstance(v, str) else v for k, v in envelope.cells.items()}
+            if envelope.cells
+            else envelope.cells
+        )
+        return envelope.model_copy(update={"turns": turns, "cells": cells})
+
+    async def _prompt_context(
+        self, org_id: str
+    ) -> tuple[list[IntelligenceTopic], list[tuple[str, str]]]:
+        taxonomy = await self.intelligence_store.list_topics(org_id)
+        known_customers = await self.intelligence_store.list_customer_names(org_id)
+        return taxonomy, known_customers
+
+    async def _topic_hints(
+        self, org_id: str, text: str, taxonomy: list[IntelligenceTopic]
+    ) -> list[TaxonomyHint]:
+        """The org's topics most relevant to this text, so the prompt stays
+        bounded no matter how large the taxonomy grows."""
+        hints: list[TaxonomyHint] = []
+        for kind in (TopicKind.FEATURE_GAP, TopicKind.PAIN_POINT):
+            topics = [t for t in taxonomy if t.kind == kind and t.id is not None]
+            if not topics:
+                continue
+            ranked = topics if len(topics) <= _PROMPT_TOPIC_HINTS // 2 else await self.topic_matcher.rank_hints(
+                org_id, text, topics, _PROMPT_TOPIC_HINTS // 2
+            )
+            hints.extend(
+                TaxonomyHint(id=str(t.id), kind=t.kind, name=t.canonical_name, aliases=t.aliases, guidance=t.guidance)
+                for t in ranked
+            )
+        return hints
 
     @staticmethod
-    def is_upload_record(record: "Record") -> bool:
-        group_type = getattr(record.record_group_type, "value", record.record_group_type)
-        return (
-            record.connector_name == Connectors.KNOWLEDGE_BASE
-            or group_type == _KB_GROUP_TYPE
-        )
-
-    async def ingest_indexed_record(self, record: "Record") -> int:
-        """Feed a freshly indexed Knowledge Base upload into the pipeline.
-
-        Tabular uploads (CSV/XLSX) become one event per row; anything else is
-        one event for the whole document. The customer is inferred by the
-        extractor; when the text names none, the file name stands in so the
-        evidence is still attributed and queryable. ARR/MRR columns on a row
-        are written as revenue snapshots (file_upload source only).
-
-        Returns mentions written.
-        """
-        if not self.is_upload_record(record):
-            return 0
-
-        units = self._text_units(record)
-        if not units:
-            return 0
-
-        semaphore = asyncio.Semaphore(
-            int(os.getenv("INTELLIGENCE_UPLOAD_CONCURRENCY", _DEFAULT_UPLOAD_CONCURRENCY))
-        )
-
-        async def _one(event_id: str, text: str, cells: Mapping[str, Any] | None) -> tuple[int, bool]:
-            async with semaphore:
-                return await self._ingest_upload_unit(record, event_id, text, cells)
-
-        # return_exceptions: one row's MySQL/LLM failure must not abort the
-        # rest of the CSV (and must not surface as a single sink-level throw
-        # that looks like the whole upload produced nothing).
-        results = await asyncio.gather(
-            *(_one(eid, text, cells) for eid, text, cells in units),
-            return_exceptions=True,
-        )
-        total = 0
-        revenue_writes = 0
-        failures = 0
-        for result in results:
-            if isinstance(result, BaseException):
-                failures += 1
-                self.logger.warning(
-                    "Upload unit failed for '%s': %s",
-                    record.record_name,
-                    result,
-                    exc_info=result,
-                )
-            else:
-                mentions, wrote_revenue = result
-                total += mentions
-                if wrote_revenue:
-                    revenue_writes += 1
-
-        # Scores are recomputed per mention; a mid-batch failure can leave the
-        # org's score rows incomplete. One org-wide pass heals that cheaply.
-        # Revenue snapshots skip per-row recompute during the batch for the same reason.
-        if total > 0 or revenue_writes > 0:
-            try:
-                await self.intelligence_store.recompute_feature_gap_scores(record.org_id)
-            except Exception:
-                self.logger.warning(
-                    "Post-upload score recompute failed for org %s",
-                    record.org_id,
-                    exc_info=True,
-                )
-
-        self.logger.info(
-            "✅ Upload '%s': %d unit(s) analysed, %d mention(s) written, "
-            "%d revenue snapshot(s) (%d unit failure(s))",
-            record.record_name, len(units), total, revenue_writes, failures,
-        )
-        if failures and total == 0 and revenue_writes == 0:
-            raise RuntimeError(
-                f"Customer intelligence ingestion failed for all {failures} unit(s) of '{record.record_name}'"
-            )
-        return total
-
-    def _text_units(
-        self, record: "Record"
-    ) -> list[tuple[str, str, Optional[Mapping[str, Any]]]]:
-        """Split a record into (external_event_id, text, cells) units."""
-        containers = record.block_containers
-        if not containers or not containers.blocks:
-            return []
-
-        rows: list[tuple[str, str, Optional[Mapping[str, Any]]]] = []
-        prose: list[str] = []
-        for block in containers.blocks:
-            data = block.data
-            if not data:
-                continue
-            if block.type == BlockType.TABLE_ROW:
-                text = data.get("row_natural_language_text") if isinstance(data, dict) else str(data)
-                if text and text.strip():
-                    row_no = data.get("row_number", block.index) if isinstance(data, dict) else block.index
-                    cells = data.get("cells") if isinstance(data, dict) else None
-                    if not isinstance(cells, Mapping):
-                        cells = None
-                    rows.append((f"{record.id}:row:{row_no}", text, cells))
-            elif block.type == BlockType.TEXT:
-                prose.append(data if isinstance(data, str) else str(data))
-
-        if rows:
-            max_rows = int(os.getenv("INTELLIGENCE_UPLOAD_MAX_ROWS", _DEFAULT_UPLOAD_MAX_ROWS))
-            if len(rows) > max_rows:
-                self.logger.warning(
-                    "⚠️ Upload '%s' has %d rows; only the first %d are analysed (INTELLIGENCE_UPLOAD_MAX_ROWS)",
-                    record.record_name, len(rows), max_rows,
-                )
-                rows = rows[:max_rows]
-            return rows
-
-        text = "\n".join(p for p in prose if p.strip())
-        return [(record.id, text, None)] if text.strip() else []
-
-    async def _ingest_upload_unit(
-        self,
-        record: "Record",
-        event_id: str,
+    def _context(
+        envelope: SignalEnvelope,
         text: str,
-        cells: Mapping[str, Any] | None,
-    ) -> tuple[int, bool]:
-        revenue = parse_revenue_fields(cells if cells is not None else text)
-
-        taxonomy, hints, known_customers = await self._load_prompt_context(record.org_id)
-        result = await self.extraction_client.extract_feature_intelligence(
-            text=text,
-            org_id=record.org_id,
-            infer_customer=True,
-            taxonomy=hints,
-            known_customers=[name for _, name in known_customers],
-        )
-        if result is None:
-            result = FeatureIntelligenceExtractionResult()
-
-        seed_name = (revenue.customer_name if revenue else None) or result.customer_name
-        ctx = await self._run_stages(
-            org_id=record.org_id,
+        result: FeatureIntelligenceExtractionResult,
+        taxonomy: list[IntelligenceTopic],
+        known_customers: list[tuple[str, str]],
+    ) -> ExtractionContext:
+        return ExtractionContext(
+            org_id=envelope.org_id,
             text=text,
             result=result,
             taxonomy=taxonomy,
-            hints=hints,
             known_customers=known_customers,
-            resolved_customer_name=seed_name,
+            resolved_customer_id=envelope.customer_external_id,
+            resolved_customer_name=envelope.customer_name,
         )
 
-        has_mentions = bool(ctx.result.feature_gaps or ctx.result.pain_points)
-        if not has_mentions and revenue is None:
-            return 0, False
-
-        customer_name = (
-            (ctx.resolved_customer_name or seed_name or "").strip()
-            or record.record_name
+    @staticmethod
+    def _attribution(
+        envelope: SignalEnvelope, ctx: ExtractionContext, revenue: Optional[RevenueFields]
+    ) -> tuple[str, str]:
+        """Who the evidence belongs to: known id → revenue row's customer →
+        LLM-inferred → source fallback (file name / email domain) → Unattributed."""
+        if envelope.customer_external_id and not ctx.resolved_customer_id:
+            return envelope.customer_external_id, envelope.customer_name or envelope.customer_external_id
+        revenue_name = revenue.customer_name if revenue is not None else None
+        name = (
+            (ctx.resolved_customer_name or "").strip()
+            or (revenue_name or "").strip()
+            or (envelope.customer_name_fallback or "").strip()
+            or UNATTRIBUTED_CUSTOMER
         )
-        external_customer_id = (
-            ctx.resolved_customer_id
-            or f"{UPLOAD_SOURCE_CONNECTOR}:{_slugify(customer_name)}"
-        )
-
-        await self.intelligence_store.upsert_customer(
-            record.org_id, external_customer_id, customer_name
-        )
-
-        wrote_revenue = False
-        if revenue is not None:
-            await self.ingest_revenue_snapshot(
-                CustomerRevenueSnapshot(
-                    org_id=record.org_id,
-                    source_connector=UPLOAD_SOURCE_CONNECTOR,
-                    external_customer_id=external_customer_id,
-                    customer_name=customer_name,
-                    mrr=revenue.mrr,
-                    arr=revenue.arr,
-                    snapshot_at=datetime.fromtimestamp(
-                        (record.source_created_at or record.created_at) / 1000,
-                        tz=timezone.utc,
-                    ),
-                ),
-                recompute_scores=False,
-            )
-            wrote_revenue = True
-
-        if not has_mentions:
-            return 0, wrote_revenue
-
-        event = CustomerSignalEvent(
-            org_id=record.org_id,
-            source_connector=UPLOAD_SOURCE_CONNECTOR,
-            source_type=SignalSourceType.DOCUMENT_UPLOAD,
-            external_customer_id=external_customer_id,
-            customer_name=customer_name,
-            external_event_id=event_id,
-            text=text,
-            occurred_at=datetime.fromtimestamp(
-                (record.source_created_at or record.created_at) / 1000, tz=timezone.utc
-            ),
-            citation_url=record.weburl,
-            metadata={"record_id": record.id, "record_name": record.record_name},
-        )
-        mentions = await self._write_mentions(event, ctx.result, taxonomy=ctx.taxonomy)
-        return mentions, wrote_revenue
-
-    # ------------------------------------------------------------------
-
-    async def _load_prompt_context(
-        self, org_id: str
-    ) -> tuple[list[IntelligenceTopic], list[TaxonomyHint], list[tuple[str, str]]]:
-        taxonomy = await self.intelligence_store.list_topics(org_id)
-        hints = [
-            TaxonomyHint(
-                id=str(t.id),
-                kind=t.kind,
-                name=t.canonical_name,
-                aliases=t.aliases or [],
-                guidance=t.guidance,
-            )
-            for t in taxonomy
-            if t.id is not None
-        ]
-        known_customers = await self.intelligence_store.list_customer_names(org_id)
-        return taxonomy, hints, known_customers
-
-    async def _run_stages(
-        self,
-        *,
-        org_id: str,
-        text: str,
-        result: FeatureIntelligenceExtractionResult | None,
-        taxonomy: list[IntelligenceTopic],
-        hints: list[TaxonomyHint],
-        known_customers: list[tuple[str, str]],
-        resolved_customer_id: str | None = None,
-        resolved_customer_name: str | None = None,
-    ) -> ExtractionContext:
-        ctx = ExtractionContext(
-            org_id=org_id,
-            text=text,
-            result=result or FeatureIntelligenceExtractionResult(),
-            taxonomy=taxonomy,
-            taxonomy_hints=hints,
-            known_customers=known_customers,
-            resolved_customer_id=resolved_customer_id,
-            resolved_customer_name=resolved_customer_name,
-        )
-        return await run_pipeline(ctx)
+        external_id = ctx.resolved_customer_id or f"{envelope.source_connector}:{_slugify(name)}"
+        return external_id, name
 
     async def _write_mentions(
         self,
-        event: CustomerSignalEvent,
-        result: FeatureIntelligenceExtractionResult | None,
-        *,
-        taxonomy: list[IntelligenceTopic] | None = None,
+        envelope: SignalEnvelope,
+        customer_id: str,
+        ctx: ExtractionContext,
+        result: FeatureIntelligenceExtractionResult,
     ) -> int:
-        if result is None:
-            return 0
-        if not result.feature_gaps and not result.pain_points:
-            self.logger.debug(
-                "No feature gaps or pain points inferred for event %s (customer=%s)",
-                event.external_event_id, event.customer_name,
-            )
-            return 0
+        topics = {(t.kind, t.canonical_name.lower()): t for t in ctx.taxonomy}
 
-        written = 0
-        existing_names = {
-            (t.kind, t.canonical_name.lower()): t for t in (taxonomy or [])
+        async def topic_for(kind: TopicKind, name: str, description: Optional[str]) -> IntelligenceTopic:
+            topic = topics.get((kind, name.lower()))
+            if topic is None:
+                topic = await self.intelligence_store.upsert_topic(
+                    IntelligenceTopic(org_id=envelope.org_id, kind=kind, canonical_name=name, description=description)
+                )
+                topics[(kind, name.lower())] = topic
+                await self.topic_matcher.register(envelope.org_id, topic)
+            return topic
+
+        common = {
+            "org_id": envelope.org_id,
+            "external_customer_id": customer_id,
+            "source_connector": envelope.source_connector,
+            "source_type": envelope.source_type,
+            "external_event_id": envelope.external_event_id,
+            "citation_url": envelope.citation_url,
+            "occurred_at": envelope.occurred_at,
+            "source_record_id": envelope.source_record_id,
+            "extraction_model": result.model,
+            "prompt_version": result.prompt_version,
         }
 
-        for gap in result.feature_gaps:
-            if (TopicKind.FEATURE_GAP, gap.feature_name.lower()) not in existing_names:
-                topic = await self.intelligence_store.upsert_topic(
-                    IntelligenceTopic(
-                        org_id=event.org_id,
-                        kind=TopicKind.FEATURE_GAP,
-                        canonical_name=gap.feature_name,
-                    )
-                )
-                existing_names[(TopicKind.FEATURE_GAP, gap.feature_name.lower())] = topic
-
-            mention = FeatureGapMentionRecord(
-                org_id=event.org_id,
-                external_customer_id=event.external_customer_id,
-                feature_name=gap.feature_name,
-                description=gap.description,
-                confidence=gap.confidence,
-                excerpt=gap.excerpt,
-                source_connector=event.source_connector,
-                source_type=event.source_type,
-                external_event_id=event.external_event_id,
-                citation_url=event.citation_url,
-                occurred_at=event.occurred_at,
+        written = 0
+        feature_names: list[str] = []
+        for gap in ctx.result.feature_gaps:
+            topic = await topic_for(TopicKind.FEATURE_GAP, gap.feature_name, gap.description)
+            await self.intelligence_store.upsert_feature_gap_mention(
+                FeatureGapMentionRecord(
+                    **common,
+                    **gap.attributes(),
+                    feature_name=topic.canonical_name,
+                    description=gap.description,
+                    confidence=gap.confidence,
+                    excerpt=gap.excerpt,
+                    topic_id=topic.id,
+                ),
+                recompute=False,
             )
-            await self.intelligence_store.upsert_feature_gap_mention(mention)
+            feature_names.append(topic.canonical_name)
             written += 1
 
-        for pain in result.pain_points:
-            if (TopicKind.PAIN_POINT, pain.summary.lower()) not in existing_names:
-                topic = await self.intelligence_store.upsert_topic(
-                    IntelligenceTopic(
-                        org_id=event.org_id,
-                        kind=TopicKind.PAIN_POINT,
-                        canonical_name=pain.summary,
-                    )
+        for pain in ctx.result.pain_points:
+            topic = await topic_for(TopicKind.PAIN_POINT, pain.summary, None)
+            await self.intelligence_store.upsert_pain_point_mention(
+                PainPointMentionRecord(
+                    **common,
+                    **pain.attributes(),
+                    topic_name=topic.canonical_name,
+                    summary=pain.summary,
+                    confidence=pain.confidence,
+                    excerpt=pain.excerpt,
+                    topic_id=topic.id,
                 )
-                existing_names[(TopicKind.PAIN_POINT, pain.summary.lower())] = topic
-
-            mention = PainPointMentionRecord(
-                org_id=event.org_id,
-                external_customer_id=event.external_customer_id,
-                topic_name=pain.summary,
-                summary=pain.summary,
-                sentiment=pain.sentiment,
-                confidence=pain.confidence,
-                excerpt=pain.excerpt,
-                source_connector=event.source_connector,
-                source_type=event.source_type,
-                external_event_id=event.external_event_id,
-                citation_url=event.citation_url,
-                occurred_at=event.occurred_at,
             )
-            await self.intelligence_store.upsert_pain_point_mention(mention)
             written += 1
 
+        if feature_names:
+            await self.intelligence_store.recompute_feature_gap_scores(envelope.org_id, feature_names)
         self.logger.info(
-            "✅ Ingested %d mention(s) for customer '%s' (event %s)",
-            written, event.customer_name, event.external_event_id,
+            "✅ %d mention(s) for customer '%s' from %s event %s",
+            written, customer_id, envelope.source_connector, envelope.external_event_id,
         )
         return written

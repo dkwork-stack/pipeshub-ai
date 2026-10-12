@@ -10,14 +10,20 @@ import {
   ConnectorBadges,
   EmptyState,
   ErrorState,
+  INTENT_LABELS,
   LastUpdatedBadge,
   LoadingRows,
   MiniBar,
+  MixBar,
   PortalHero,
   ScoreBadge,
   StatStrip,
   SurfacePanel,
+  TrendIndicator,
   formatCount,
+  formatDate,
+  intentSegments,
+  sentimentSegments,
   formatMoney,
   formatScore,
   portal,
@@ -26,6 +32,20 @@ import {
 } from './components';
 
 const linkStyle = { textDecoration: 'none', color: 'inherit' } as const;
+const panelGrid = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+  gap: 16,
+  width: '100%',
+  alignItems: 'stretch',
+} as const;
+const stretchPanel = {
+  minWidth: 0,
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  boxSizing: 'border-box',
+} as const;
 const SCORE_THRESHOLD = 0.65;
 
 export default function IntelligenceOverviewPage() {
@@ -97,6 +117,13 @@ export default function IntelligenceOverviewPage() {
                 label: 'Customers',
                 value: formatCount(data.customer_count),
                 hint: 'Asking for these features',
+              },
+              {
+                icon: 'report_problem',
+                color: 'red',
+                label: 'Pain points',
+                value: formatCount(data.pain_point_count ?? 0),
+                hint: 'Distinct problems customers raised',
               },
               {
                 icon: 'format_quote',
@@ -276,6 +303,130 @@ export default function IntelligenceOverviewPage() {
               )}
             </SurfacePanel>
           </Box>
+
+          <Box className="intelligence-overview-panels" style={{ ...panelGrid, marginTop: 16 }}>
+            <SurfacePanel
+              title="Emerging asks"
+              subtitle="Mentions in the last 30 days vs the 30 before"
+              icon="trending_up"
+              style={stretchPanel}
+            >
+              {(data.emerging_feature_gaps ?? []).length === 0 ? (
+                <EmptyState icon="trending_flat" title="Nothing rising right now" description="Asks appear here when recent demand outpaces the previous month." />
+              ) : (
+                <Table.Root size="2" style={{ width: '100%' }}>
+                  <Table.Header>
+                    <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                      <ColumnHeader>Feature</ColumnHeader>
+                      <ColumnHeader align="right">Last 30 days</ColumnHeader>
+                      <ColumnHeader align="right">ARR</ColumnHeader>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {(data.emerging_feature_gaps ?? []).map((gap) => (
+                      <Table.Row key={gap.feature_name}>
+                        <Table.RowHeaderCell>
+                          <Link href={`/intelligence/feature-gaps/detail?name=${encodeURIComponent(gap.feature_name)}`} style={linkStyle}>
+                            <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
+                              {gap.feature_name}
+                            </Text>
+                          </Link>
+                        </Table.RowHeaderCell>
+                        <Table.Cell align="right">
+                          <TrendIndicator trend={gap.trend} />
+                        </Table.Cell>
+                        <Table.Cell align="right">
+                          <Text size="2" style={{ color: portal.strong }}>
+                            {formatMoney(gap.total_arr_at_stake, true)}
+                          </Text>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              )}
+            </SurfacePanel>
+
+            <SurfacePanel
+              title="At-risk customers"
+              subtitle="Churn signals or mostly negative evidence, by ARR"
+              icon="warning"
+              action={
+                <Button asChild size="1" variant="soft" style={portal.button.secondary}>
+                  <Link href="/intelligence/customers?at_risk=1" style={linkStyle}>
+                    View all
+                  </Link>
+                </Button>
+              }
+              style={stretchPanel}
+            >
+              {(data.at_risk_customers ?? []).length === 0 ? (
+                <EmptyState icon="verified_user" title="No at-risk customers" description="No churn signals or predominantly negative evidence." />
+              ) : (
+                <Table.Root size="2" style={{ width: '100%' }}>
+                  <Table.Header>
+                    <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
+                      <ColumnHeader>Customer</ColumnHeader>
+                      <ColumnHeader align="right">ARR</ColumnHeader>
+                      <ColumnHeader>Signal</ColumnHeader>
+                      <ColumnHeader>Last touch</ColumnHeader>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {(data.at_risk_customers ?? []).map((c) => (
+                      <Table.Row key={c.external_customer_id}>
+                        <Table.RowHeaderCell>
+                          <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(c.external_customer_id)}`} style={linkStyle}>
+                            <Flex align="center" gap="2">
+                              <Avatar name={c.customer_name} size={24} />
+                              <Text size="2" weight="medium" style={{ color: portal.colors.blue }}>
+                                {c.customer_name}
+                              </Text>
+                            </Flex>
+                          </Link>
+                        </Table.RowHeaderCell>
+                        <Table.Cell align="right">{formatMoney(c.latest_revenue?.arr, true)}</Table.Cell>
+                        <Table.Cell>
+                          <Text size="1" style={{ color: portal.signal.negative.fg }}>
+                            {c.health && c.health.churn_risk_count > 0
+                              ? `${formatCount(c.health.churn_risk_count)} churn signal${c.health.churn_risk_count === 1 ? '' : 's'}`
+                              : `${Math.round((c.health?.negative_share ?? 0) * 100)}% negative`}
+                          </Text>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Text size="1" style={{ color: portal.muted, whiteSpace: 'nowrap' }}>
+                            {formatDate(c.health?.last_touch_at)}
+                          </Text>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              )}
+            </SurfacePanel>
+          </Box>
+
+          <SurfacePanel
+            title="Voice of the customer"
+            subtitle="What kind of asks come in, and how customers feel when they raise them"
+            icon="record_voice_over"
+            style={{ marginTop: 16 }}
+          >
+            <Box style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 24 }}>
+              <Flex direction="column" gap="2">
+                <Text size="2" weight="medium" style={{ color: portal.strong }}>
+                  Ask type
+                </Text>
+                <MixBar segments={intentSegments(data.intent_mix, INTENT_LABELS)} />
+              </Flex>
+              <Flex direction="column" gap="2">
+                <Text size="2" weight="medium" style={{ color: portal.strong }}>
+                  Sentiment
+                </Text>
+                <MixBar segments={sentimentSegments(data.tone_mix)} />
+              </Flex>
+            </Box>
+          </SurfacePanel>
         </>
       ) : null}
     </Flex>

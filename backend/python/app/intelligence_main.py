@@ -1,8 +1,9 @@
 """Customer Feature Intelligence portal service entry point (port 8094).
 
-Read-only FastAPI microservice that serves the portal UI and AI agents from
-the MySQL intelligence store: overview, revenue-ranked feature gaps with
-citations, and per-customer insights. Auth is the platform's own
+FastAPI microservice that serves the portal UI and AI agents from the MySQL
+intelligence store: overview, revenue-ranked feature gaps and pain points
+with citations, per-customer insights, audited topic curation and GDPR
+erasure. Auth is the platform's own
 ``authMiddleware`` (same session JWT / service tokens as every other service);
 the Node gateway proxies ``/api/v1/intelligence-portal/*`` here.
 """
@@ -66,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="PipesHub Customer Feature Intelligence API",
-    description="Read-only API over customer pain points, feature gaps and revenue evidence",
+    description="Customer pain points, feature gaps and revenue evidence; audited curation and erasure",
     version="1.0.0",
     lifespan=lifespan,
     redirect_slashes=False,

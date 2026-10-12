@@ -7,13 +7,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.middlewares.auth import require_scopes
 from app.api.routes.intelligence_portal.dependencies import org_id, pagination
-from app.api.schemas.intelligence_portal import Page, PainPointDetailResponse, PainPointResponse
+from app.api.schemas.intelligence_portal import (
+    Page,
+    PainPointDetailResponse,
+    PainPointResponse,
+)
 from app.config.constants.service import OAuthScopes
+from app.models.intelligence import (
+    TopicStatus,  # noqa: TC001 - FastAPI validates query params at runtime
+)
 
 if TYPE_CHECKING:
     from app.modules.customer_intelligence.queries.services import (
-        PainPointQueryService,
         Pagination,
+        PainPointQueryService,
     )
 
 router = APIRouter(prefix="/pain-points", tags=["intelligence-portal: pain points"])
@@ -33,6 +40,7 @@ async def search_pain_points(
     source_connector: Optional[str] = Query(None, max_length=64),
     customer_id: Optional[str] = Query(None, max_length=255),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
+    status: Optional[TopicStatus] = Query(None),
     page: "Pagination" = Depends(pagination),
     org: str = Depends(org_id),
     service: "PainPointQueryService" = Depends(pain_point_service),
@@ -43,6 +51,7 @@ async def search_pain_points(
         source_connector=source_connector,
         external_customer_id=customer_id,
         min_confidence=min_confidence,
+        status=status,
         pagination=page,
     )
 

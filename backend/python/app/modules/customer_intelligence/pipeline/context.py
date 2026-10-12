@@ -45,3 +45,6 @@ class ExtractionContext(BaseModel):
     resolved_customer_id: Optional[str] = None
     resolved_customer_name: Optional[str] = None
     dropped: list[DropReason] = Field(default_factory=list)
+    # (topic_id, wording) for items matched non-exactly; stored as aliases so
+    # lexical matching and prompt hints improve with every sync.
+    alias_proposals: list[tuple[int, str]] = Field(default_factory=list)

@@ -1,5 +1,5 @@
 /**
- * Intelligence Portal proxy controller — forwards portal reads to the Python
+ * Intelligence Portal proxy controller — forwards portal requests to the Python
  * intelligence service's `/api/v1/intelligence-portal` router
  * (`backend/python/app/api/routes/intelligence_portal/`). Thin-proxy shape
  * borrowed from `skills.controller.ts`: axios with `validateStatus: () => true`
@@ -142,7 +142,7 @@ export const getTopic = forwardGet(
 );
 
 function forwardMutating(
-  method: 'PATCH' | 'POST',
+  method: 'PATCH' | 'POST' | 'DELETE',
   pathBuilder: PathBuilder,
   action: string,
 ) {
@@ -179,6 +179,23 @@ export const mergeTopic = forwardMutating(
   'POST',
   (req) => `${PORTAL_BASE}/topics/${encParam(req.params.topicId)}/merge`,
   'Merge Intelligence Topic',
+);
+
+// GDPR erasure (audited upstream).
+export const eraseCustomer = forwardMutating(
+  'DELETE',
+  (req) =>
+    `${PORTAL_BASE}/customers/${encParam(req.params.externalCustomerId)}`,
+  'Erase Intelligence Customer',
+);
+export const eraseSourceRecord = forwardMutating(
+  'DELETE',
+  (req) => `${PORTAL_BASE}/records/${encParam(req.params.recordId)}`,
+  'Erase Intelligence Source Record',
+);
+export const getAuditLog = forwardGet(
+  () => `${PORTAL_BASE}/audit`,
+  'Get Intelligence Audit Log',
 );
 
 export const searchCustomers = forwardGet(

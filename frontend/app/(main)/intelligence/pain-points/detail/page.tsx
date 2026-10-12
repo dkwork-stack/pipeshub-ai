@@ -19,12 +19,16 @@ import {
   EmptyState,
   ErrorState,
   EvidenceFilters,
+  ImpactLines,
   LoadingRows,
   PortalHero,
+  SignalChips,
   SourceConnectorIcon,
   StatStrip,
+  StatusControl,
   SurfacePanel,
   TopicGuidancePanel,
+  TopicSignals,
   formatConfidence,
   formatConnectorLabel,
   formatCount,
@@ -68,6 +72,7 @@ function PainPointDetailContent() {
         eyebrow="Pain point"
         title={topicName}
         subtitle="Who expressed this, the evidence behind it, and guidance for the extractor."
+        actions={<StatusControl kind="pain_point" canonicalName={topicName} onChanged={() => void mutate()} />}
       />
 
       {isNotFoundError(error) ? (
@@ -91,6 +96,10 @@ function PainPointDetailContent() {
               },
             ]}
           />
+
+          <SurfacePanel title="How customers talk about it" icon="insights">
+            <TopicSignals trend={data.trend} />
+          </SurfacePanel>
 
           <SurfacePanel title="Extraction guidance">
             <TopicGuidancePanel kind="pain_point" canonicalName={topicName} />
@@ -146,6 +155,7 @@ function PainPointDetailContent() {
                 <Table.Header>
                   <Table.Row style={{ backgroundColor: portal.colors.tableHeaderBg }}>
                     <ColumnHeader>Evidence</ColumnHeader>
+                    <ColumnHeader>Customer</ColumnHeader>
                     <ColumnHeader>Source</ColumnHeader>
                     <ColumnHeader align="right">Confidence</ColumnHeader>
                     <ColumnHeader>Date</ColumnHeader>
@@ -162,7 +172,16 @@ function PainPointDetailContent() {
                               “{m.excerpt}”
                             </Text>
                           ) : null}
+                          <ImpactLines evidence={m} />
+                          <SignalChips evidence={m} />
                         </Flex>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Link href={`/intelligence/customers/detail?id=${encodeURIComponent(m.external_customer_id)}`}>
+                          <Text size="2" style={{ color: portal.colors.blue }}>
+                            {m.external_customer_id}
+                          </Text>
+                        </Link>
                       </Table.Cell>
                       <Table.Cell>
                         <Flex align="center" gap="1">

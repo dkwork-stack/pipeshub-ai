@@ -33,6 +33,7 @@ export function FiltersBar({
   onConnectorChange,
   connectors,
   searchPlaceholder,
+  extra,
 }: {
   query: string;
   onQueryChange: (v: string) => void;
@@ -40,6 +41,8 @@ export function FiltersBar({
   onConnectorChange: (v: string) => void;
   connectors: string[];
   searchPlaceholder: string;
+  /** Page-specific filters (status, intent, at-risk) rendered after the source select. */
+  extra?: ReactNode;
 }) {
   return (
     <Flex gap="3" wrap="wrap" align="center" mb="4" className="intelligence-filters">
@@ -74,7 +77,39 @@ export function FiltersBar({
           ))}
         </Select.Content>
       </Select.Root>
+      {extra}
     </Flex>
+  );
+}
+
+const ALL_VALUES = '__all__';
+
+/** Single-choice filter with an "All" option, styled like the other filter controls. */
+export function SelectFilter({
+  value,
+  onChange,
+  options,
+  allLabel,
+  width = 200,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: readonly { value: string; label: string }[];
+  allLabel: string;
+  width?: number;
+}) {
+  return (
+    <Select.Root size="3" value={value || ALL_VALUES} onValueChange={(v) => onChange(v === ALL_VALUES ? '' : v)}>
+      <Select.Trigger style={{ width, ...filterControlStyle }} />
+      <Select.Content className="intelligence-select-content" position="popper">
+        <Select.Item value={ALL_VALUES}>{allLabel}</Select.Item>
+        {options.map((o) => (
+          <Select.Item key={o.value} value={o.value}>
+            {o.label}
+          </Select.Item>
+        ))}
+      </Select.Content>
+    </Select.Root>
   );
 }
 

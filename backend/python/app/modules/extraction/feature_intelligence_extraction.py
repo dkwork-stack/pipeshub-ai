@@ -25,26 +25,43 @@ from app.utils.streaming import invoke_with_structured_output_and_reflection
 
 _TAXONOMY_CAP_PER_KIND = 100
 
+# Bump on any prompt or schema change; stored on every mention for reproducibility.
+PROMPT_VERSION = "fi-2"
+
 FEATURE_INTELLIGENCE_PROMPT = """You are a product-management analyst. Read the customer-facing text below \
-(a support ticket, CRM note, call-transcript excerpt, or uploaded document) and extract two things, \
+(a support ticket thread, CRM note, call transcript, email, or uploaded document/row) and extract two things, \
 grounded strictly in the text:
 
-1. pain_points: concrete problems/frustrations the customer expressed. For each, include a short summary, \
-sentiment (Positive|Neutral|Negative), a confidence score (0-1), a verbatim excerpt copied from the text \
-that supports it, and topic_id when the item matches a Known topic below (otherwise null).
-2. feature_gaps: specific product features or capabilities the customer is asking for, or that would resolve \
-their pain point, that do not appear to exist today. For each, include a short, normalized feature_name \
-(e.g. "Bulk CSV export", not a full sentence), a one-sentence description of what's needed and why, a \
-confidence score (0-1), a verbatim excerpt copied from the text that supports it, and topic_id when the \
-item matches a Known topic below (otherwise null).
+1. pain_points: concrete problems or frustrations the customer expressed (short summary).
+2. feature_gaps: specific product capabilities the customer asks for, or that would resolve their pain point, \
+that do not appear to exist today. Use a short, normalized feature_name (e.g. "Bulk CSV export", not a \
+sentence) and a one-sentence description of what is needed and why.
+
+For every item also return:
+- excerpt: a verbatim quote copied exactly from the text that supports it (never paraphrase).
+- confidence: 0-1.
+- sentiment: Positive | Neutral | Negative.
+- tone: frustrated | angry | anxious | neutral | appreciative.
+- urgency: low | medium | high | critical ("blocking go-live" is critical; "nice to have" is low).
+- intent: feature_request | bug | usability | performance | integration | pricing | compliance_security | other.
+- speaker_role: customer | agent | unknown — who said the excerpt.
+- product_area: the product area concerned (e.g. "Reporting", "Admin & SSO"), or null.
+- business_impact: the stated consequence (e.g. "blocking rollout to 300 seats"), or null.
+- workaround: how the customer copes today, if stated, or null.
+- competitor: a competitor product named in connection with this item, or null.
+- churn_risk: true only if the customer signals cancelling, not renewing, or switching over this item.
+- topic_id: the id of a Known topic when the item matches one, otherwise null.
 
 Rules:
-- Only extract what is explicitly supported by the text. Do not invent excerpts — they must be copied verbatim.
-- If there is no clear pain point or feature gap, return empty lists.
-- Prefer Known topics: when an item matches a known topic (by name or alias), set topic_id to that topic's \
-id and use its canonical name for feature_name / summary. Follow each topic's guidance (include/exclude).
-- Propose a new name only when nothing in Known topics fits. Normalize new names so the same underlying \
-request from different customers uses the same wording (e.g. always "SSO / SAML support").
+- Conversations are labelled by speaker, e.g. "[Customer · …]" and "[Agent]". Extract asks and pain points \
+expressed by the customer. An agent's reply is context only: "that isn't supported today" confirms a customer's \
+gap but is not a new ask by itself.
+- Only extract what the text supports. If there is no clear pain point or feature gap, return empty lists.
+- Text such as [email], [phone] or [card] is redacted personal data; ignore it.
+- Prefer Known topics: when an item means the same as a known topic (by name, alias or meaning), set topic_id \
+and use that topic's name. Follow each topic's guidance (include/exclude).
+- Propose a new name only when no known topic fits. Normalize new names so the same request from different \
+customers gets the same wording (e.g. always "SSO / SAML support").
 {known_topics_block}
 {known_customers_block}
 {customer_instruction}
@@ -104,6 +121,16 @@ def _format_customers(known_customers: list[str]) -> str:
     return f"Known customers (prefer these spellings): {names}\n"
 
 
+def _model_label(llm_config: Optional[dict]) -> Optional[str]:
+    if not llm_config:
+        return None
+    configuration = llm_config.get("configuration") or {}
+    model = configuration.get("model") or llm_config.get("modelName") or llm_config.get("model")
+    provider = llm_config.get("provider")
+    label = "/".join(str(p) for p in (provider, model) if p)
+    return label[:191] or None
+
+
 class FeatureIntelligenceExtractor:
     def __init__(self, logger: Logger, config_service: ConfigurationService) -> None:
         self.logger = logger
@@ -124,7 +151,7 @@ class FeatureIntelligenceExtractor:
             self.logger.debug("⏭️ Skipping LLM extraction: no signal keywords found")
             return FeatureIntelligenceExtractionResult()
 
-        llm, _config = await get_llm_for_role(self.config_service, "indexing", reasoning_effort="low")
+        llm, llm_config = await get_llm_for_role(self.config_service, "indexing", reasoning_effort="low")
         prompt = FEATURE_INTELLIGENCE_PROMPT.format(
             text=text[:20000],
             customer_instruction=_CUSTOMER_INSTRUCTION if infer_customer else "",
@@ -136,7 +163,10 @@ class FeatureIntelligenceExtractor:
             parsed = await invoke_with_structured_output_and_reflection(
                 llm, messages, FeatureIntelligenceExtractionResult
             )
-            return parsed if parsed is not None else FeatureIntelligenceExtractionResult()
+            result = parsed if parsed is not None else FeatureIntelligenceExtractionResult()
+            result.model = _model_label(llm_config)
+            result.prompt_version = PROMPT_VERSION
+            return result
         except Exception as e:
             self.logger.error(f"❌ Feature intelligence extraction failed for org '{org_id}': {e}")
             raise

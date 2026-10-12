@@ -1,9 +1,9 @@
 """DI container for the Customer Feature Intelligence portal service.
 
-Read-only service: it owns an ``IIntelligenceQueryRepository`` (MySQL today,
-selected by ``IntelligenceStoreFactory``) and the query services the portal
-routers depend on. It has no graph/vector/broker connections — the write side
-lives on the indexing service.
+Owns an ``IIntelligenceQueryRepository`` (MySQL today, selected by
+``IntelligenceStoreFactory``) for reads, plus the store for audited curation
+and erasure. It has no graph/vector/broker connections — signal ingestion
+lives on the indexing service and the intelligence worker.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from app.config.configuration_service import ConfigurationService
 from app.config.providers.encrypted_store import EncryptedKeyValueStore
 from app.containers.container import BaseAppContainer
 from app.modules.customer_intelligence.queries.services import (
+    ComplianceService,
     CustomerQueryService,
     FeatureGapQueryService,
     OverviewQueryService,
@@ -63,6 +64,7 @@ class IntelligenceAppContainer(BaseAppContainer):
     topic_service = providers.Singleton(
         TopicService, store=intelligence_store
     )
+    compliance_service = providers.Singleton(ComplianceService, store=intelligence_store)
 
     wiring_config = containers.WiringConfiguration(modules=["app.intelligence_main"])
 

@@ -19,6 +19,7 @@ import {
   ConfidenceBadge,
   ConnectorBadges,
   EmptyState,
+  EraseCustomerButton,
   ErrorState,
   EvidenceFilters,
   LoadingRows,
@@ -41,6 +42,19 @@ const INSIGHT_COLS = {
   date: '18%',
   sources: '22%',
 } as const;
+
+function HealthFact({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <Flex direction="column" gap="1" style={{ minWidth: 120 }}>
+      <Text size="1" style={{ color: portal.muted }}>
+        {label}
+      </Text>
+      <Text size="3" weight="bold" style={{ color: color ?? portal.strong }}>
+        {value}
+      </Text>
+    </Flex>
+  );
+}
 
 function CustomerDetailContent() {
   const searchParams = useSearchParams();
@@ -78,6 +92,7 @@ function CustomerDetailContent() {
         eyebrow="Customer"
         title={data?.customer_name ?? customerId}
         subtitle={`Customer ID: ${customerId}`}
+        actions={data ? <EraseCustomerButton customerId={customerId} customerName={data.customer_name} /> : null}
       />
 
       {isNotFoundError(error) ? (
@@ -110,9 +125,30 @@ function CustomerDetailContent() {
                 hint: 'used / licensed',
               },
               { icon: 'extension', label: 'Feature gaps', value: formatCount(data.feature_gap_count) },
+              { icon: 'report_problem', color: 'red', label: 'Pain points', value: formatCount(data.pain_point_count ?? 0) },
               { icon: 'format_quote', label: 'Mentions', value: formatCount(data.mention_count) },
             ]}
           />
+
+          {data.health ? (
+            <SurfacePanel title="Account health" subtitle="From this customer's own evidence" icon="monitor_heart">
+              <Flex gap="6" wrap="wrap" align="start">
+                <HealthFact
+                  label="Status"
+                  value={data.health.at_risk ? 'At risk' : 'Healthy'}
+                  color={data.health.at_risk ? portal.signal.negative.fg : portal.signal.positive.fg}
+                />
+                <HealthFact label="Churn signals" value={formatCount(data.health.churn_risk_count)} />
+                <HealthFact label="Negative evidence" value={`${Math.round(data.health.negative_share * 100)}%`} />
+                <HealthFact label="High-urgency asks" value={formatCount(data.health.high_urgency_count)} />
+                <HealthFact label="Last touch" value={formatDate(data.health.last_touch_at)} />
+                <HealthFact
+                  label="Competitors named"
+                  value={data.health.competitors.length ? data.health.competitors.join(', ') : '—'}
+                />
+              </Flex>
+            </SurfacePanel>
+          ) : null}
 
           {revenue && revenue.consumed_features.length > 0 ? (
             <Flex align="center" gap="2" wrap="wrap" mb="2">

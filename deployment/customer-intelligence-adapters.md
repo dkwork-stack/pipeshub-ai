@@ -49,3 +49,32 @@ spec:
 Recommended cadence: revenue snapshots (Chargebee) daily; support/CRM signal
 adapters (Freshdesk, Salesforce) every 15–30 minutes. Each script's module
 docstring lists the env vars it needs.
+
+## Retention purge
+
+`scripts/customer_intelligence/retention_purge.py` deletes evidence older than
+`INTELLIGENCE_RETENTION_DAYS` (no-op when unset) and writes one audit entry
+per org. Schedule it daily with the same image:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: intelligence-retention-purge
+spec:
+  schedule: "15 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: retention-purge
+              image: <same image as the indexing/app deployment>
+              command: ["python", "-m", "scripts.customer_intelligence.retention_purge"]
+              envFrom:
+                - secretRef:
+                    name: <app secret with INTELLIGENCE_MYSQL_*, INTELLIGENCE_RETENTION_DAYS>
+```
+
+Run with `--dry-run` first to see which orgs would be purged.

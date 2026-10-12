@@ -1,13 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { Badge, Flex, Table, Text } from '@radix-ui/themes';
+import { useSearchParams } from 'next/navigation';
+import { Badge, Flex, SegmentedControl, Table, Text, Tooltip } from '@radix-ui/themes';
 import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import type { CustomerSummary } from '../types';
 import { useCustomers, useSourceConnectors } from '../api';
 import {
   Avatar,
+  ChurnRiskBadge,
   ColumnHeader,
   EmptyState,
   ErrorState,
@@ -30,7 +32,7 @@ import {
 
 const PAGE_SIZE = 25;
 
-type SortKey = 'customer_name' | 'arr' | 'mrr' | 'feature_gap_count' | 'mention_count';
+type SortKey = 'customer_name' | 'arr' | 'mrr' | 'feature_gap_count' | 'pain_point_count' | 'mention_count' | 'negative' | 'last_touch';
 
 function getSortValue(row: CustomerSummary, key: SortKey): string | number | null | undefined {
   switch (key) {
@@ -38,14 +40,47 @@ function getSortValue(row: CustomerSummary, key: SortKey): string | number | nul
       return row.latest_revenue?.arr;
     case 'mrr':
       return row.latest_revenue?.mrr;
+    case 'negative':
+      return row.health?.negative_share;
+    case 'last_touch':
+      return row.health?.last_touch_at;
     default:
       return row[key];
   }
 }
 
-export default function CustomersPage() {
+function CustomerHealthCell({ customer }: { customer: CustomerSummary }) {
+  const health = customer.health;
+  if (!health) {
+    return (
+      <Text size="1" style={{ color: portal.muted }}>
+        —
+      </Text>
+    );
+  }
+  const negativePct = Math.round(health.negative_share * 100);
+  return (
+    <Flex direction="column" gap="1" align="start">
+      {health.churn_risk_count > 0 ? <ChurnRiskBadge /> : null}
+      <Tooltip content="Share of this customer's evidence with negative sentiment">
+        <Text size="1" style={{ color: negativePct >= 50 ? portal.signal.negative.fg : portal.muted }}>
+          {negativePct}% negative
+        </Text>
+      </Tooltip>
+      {health.competitors.length > 0 ? (
+        <Text size="1" style={{ color: portal.signal.attention.fg }}>
+          Mentions {health.competitors.join(', ')}
+        </Text>
+      ) : null}
+    </Flex>
+  );
+}
+
+function CustomersPageContent() {
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const [connector, setConnector] = useState('');
+  const [atRisk, setAtRisk] = useState(searchParams.get('at_risk') === '1');
   const [offset, setOffset] = useState(0);
 
   const debouncedQuery = useDebouncedSearch(query, 300);
@@ -54,6 +89,7 @@ export default function CustomersPage() {
   const { data, error, isLoading, mutate } = useCustomers({
     q: debouncedQuery || undefined,
     source_connector: connector || undefined,
+    at_risk: atRisk || undefined,
     limit: PAGE_SIZE,
     offset,
   });
@@ -80,7 +116,12 @@ export default function CustomersPage() {
         { header: 'MRR', accessor: (r: CustomerSummary) => r.latest_revenue?.mrr ?? '' },
         { header: 'Renewal', accessor: (r: CustomerSummary) => r.latest_revenue?.renewal_date ?? '' },
         { header: 'Feature gaps', accessor: (r: CustomerSummary) => r.feature_gap_count },
+        { header: 'Pain points', accessor: (r: CustomerSummary) => r.pain_point_count ?? 0 },
         { header: 'Mentions', accessor: (r: CustomerSummary) => r.mention_count },
+        { header: 'Negative share', accessor: (r: CustomerSummary) => r.health?.negative_share ?? '' },
+        { header: 'Churn signals', accessor: (r: CustomerSummary) => r.health?.churn_risk_count ?? '' },
+        { header: 'Competitors', accessor: (r: CustomerSummary) => (r.health?.competitors ?? []).join('; ') },
+        { header: 'Last touch', accessor: (r: CustomerSummary) => r.health?.last_touch_at ?? '' },
       ],
       sorted,
     );
@@ -100,6 +141,16 @@ export default function CustomersPage() {
         onConnectorChange={resetAnd(setConnector)}
         connectors={connectors ?? []}
         searchPlaceholder="Search customer name or ID…"
+        extra={
+          <SegmentedControl.Root
+            size="3"
+            value={atRisk ? 'at_risk' : 'all'}
+            onValueChange={(v) => resetAnd(setAtRisk)(v === 'at_risk')}
+          >
+            <SegmentedControl.Item value="all">All customers</SegmentedControl.Item>
+            <SegmentedControl.Item value="at_risk">At risk</SegmentedControl.Item>
+          </SegmentedControl.Root>
+        }
       />
 
       <SurfacePanel
@@ -126,7 +177,9 @@ export default function CustomersPage() {
                 <SortableHeader label="MRR" sortKey="mrr" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 <ColumnHeader>Renewal</ColumnHeader>
                 <SortableHeader label="Gaps" sortKey="feature_gap_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                <SortableHeader label="Mentions" sortKey="mention_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <SortableHeader label="Pain points" sortKey="pain_point_count" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                <SortableHeader label="Health" sortKey="negative" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableHeader label="Last touch" sortKey="last_touch" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <ColumnHeader>Top asks</ColumnHeader>
                 <ColumnHeader>{null}</ColumnHeader>
               </Table.Row>
@@ -159,7 +212,15 @@ export default function CustomersPage() {
                   <Table.Cell align="right">{formatMoney(c.latest_revenue?.mrr)}</Table.Cell>
                   <Table.Cell>{formatDate(c.latest_revenue?.renewal_date)}</Table.Cell>
                   <Table.Cell align="right">{formatCount(c.feature_gap_count)}</Table.Cell>
-                  <Table.Cell align="right">{formatCount(c.mention_count)}</Table.Cell>
+                  <Table.Cell align="right">{formatCount(c.pain_point_count ?? 0)}</Table.Cell>
+                  <Table.Cell>
+                    <CustomerHealthCell customer={c} />
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Text size="2" style={{ whiteSpace: 'nowrap' }}>
+                      {formatDate(c.health?.last_touch_at)}
+                    </Text>
+                  </Table.Cell>
                   <Table.Cell>
                     <Flex direction="column" gap="1" align="start">
                       {c.top_insights.length === 0 ? (
@@ -195,5 +256,13 @@ export default function CustomersPage() {
         ) : null}
       </SurfacePanel>
     </Flex>
+  );
+}
+
+export default function CustomersPage() {
+  return (
+    <Suspense fallback={<LoadingRows rows={8} />}>
+      <CustomersPageContent />
+    </Suspense>
   );
 }

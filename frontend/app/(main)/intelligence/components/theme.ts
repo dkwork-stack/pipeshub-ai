@@ -101,6 +101,19 @@ export const portal = {
     good: { bg: '#dcfce7', fg: '#15803d' },
     warn: { bg: '#fef3c7', fg: '#b45309' },
   } as const,
+  /**
+   * Evidence signals (tone, urgency, lifecycle). Hues carry meaning, so keep
+   * one color per meaning across every page: red = risk/negative, amber =
+   * attention, green = positive/done, slate = neutral.
+   */
+  signal: {
+    negative: { bg: '#fee2e2', fg: '#b91c1c' },
+    attention: { bg: '#fef3c7', fg: '#b45309' },
+    positive: { bg: '#dcfce7', fg: '#15803d' },
+    info: { bg: '#dbeafe', fg: '#1d4ed8' },
+    progress: { bg: '#ede9fe', fg: '#6d28d9' },
+    neutral: { bg: '#f1f5f9', fg: '#475569' },
+  } as const,
   /** Deterministic avatar palette — color is picked by hashing the name, not random. */
   avatarPalette: ['#2563eb', '#9333ea', '#ea580c', '#0f172a', '#0891b2', '#16a34a', '#db2777', '#4f46e5'],
 } as const;

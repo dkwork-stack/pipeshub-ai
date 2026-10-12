@@ -17,6 +17,7 @@ from app.modules.customer_intelligence.queries.services import (
 
 if TYPE_CHECKING:
     from app.modules.customer_intelligence.queries.services import (
+        ComplianceService,
         CustomerQueryService,
         FeatureGapQueryService,
         OverviewQueryService,
@@ -29,6 +30,12 @@ def org_id(request: Request) -> str:
     if not value:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     return value
+
+
+def actor(request: Request) -> str | None:
+    """Who is acting, for the audit trail."""
+    user = getattr(request.state, "user", {}) or {}
+    return user.get("userId") or user.get("email") or user.get("clientId")
 
 
 def pagination(
@@ -48,3 +55,7 @@ async def feature_gap_service(request: Request) -> FeatureGapQueryService:
 
 async def customer_service(request: Request) -> CustomerQueryService:
     return await request.app.container.customer_query_service()
+
+
+async def compliance_service(request: Request) -> ComplianceService:
+    return await request.app.container.compliance_service()

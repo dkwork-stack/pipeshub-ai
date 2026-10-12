@@ -247,6 +247,18 @@ spec:
                 secretKeyRef:
                   name: {{ include "pipeshub-ai.mysqlIntelligenceSecretName" . }}
                   key: mysql-intelligence-password
+            - name: INTELLIGENCE_DISPATCH_MODE
+              value: {{ .Values.mysqlIntelligence.pipeline.dispatchMode | quote }}
+            - name: INTELLIGENCE_SOURCE_RECORD_TYPES
+              value: {{ .Values.mysqlIntelligence.pipeline.sourceRecordTypes | quote }}
+            - name: INTELLIGENCE_SOURCE_CONNECTORS
+              value: {{ .Values.mysqlIntelligence.pipeline.sourceConnectors | quote }}
+            - name: INTELLIGENCE_WORKER_CONCURRENCY
+              value: {{ .Values.mysqlIntelligence.pipeline.workerConcurrency | quote }}
+            - name: INTELLIGENCE_PII_REDACTION
+              value: {{ .Values.mysqlIntelligence.pipeline.piiRedaction | quote }}
+            - name: INTELLIGENCE_RETENTION_DAYS
+              value: {{ .Values.mysqlIntelligence.pipeline.retentionDays | quote }}
             {{- end }}
             {{- if and .Values.arango.enabled (not .Values.neo4j.enabled) }}
             - name: DATA_STORE
