@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { inject, injectable } from 'inversify';
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
@@ -37,6 +38,63 @@ function smtpConfigKey(smtpConfig: SmtpConfig): string {
     smtpConfig.username,
     smtpConfig.password,
   ]);
+}
+
+const MAILJET_SEND_URL = 'https://api.mailjet.com/v3.1/send';
+
+interface MailjetCredentials {
+  apiKey: string;
+  secretKey: string;
+}
+
+/** Read per send so setting the variables needs only a restart, not a code change. */
+function mailjetCredentials(): MailjetCredentials | null {
+  const apiKey = process.env.MAILJET_API_KEY?.trim();
+  const secretKey = process.env.MAILJET_SECRET_KEY?.trim();
+  return apiKey && secretKey ? { apiKey, secretKey } : null;
+}
+
+/** Accepts both `a@b.c` and `Name <a@b.c>`, as nodemailer does. */
+function parseAddress(address: string): { Email: string; Name?: string } {
+  const match = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(address);
+  if (!match) return { Email: address.trim() };
+  const name = match[1]!.trim();
+  return name ? { Email: match[2]!.trim(), Name: name } : { Email: match[2]!.trim() };
+}
+
+function toMailjetAttachment(attachment: {
+  filename?: string;
+  content?: string | Buffer;
+  contentType?: string;
+  encoding?: string;
+}) {
+  const content = attachment.content ?? '';
+  const base64 = Buffer.isBuffer(content)
+    ? content.toString('base64')
+    : attachment.encoding === 'base64'
+      ? content
+      : Buffer.from(content).toString('base64');
+  return {
+    Filename: attachment.filename ?? 'attachment',
+    ContentType: attachment.contentType ?? 'application/octet-stream',
+    Base64Content: base64,
+  };
+}
+
+/** Mailjet can answer per message; any non-success message fails the send. */
+function mailjetRejection(data: unknown): string | null {
+  const messages = (data as { Messages?: unknown } | null)?.Messages;
+  if (!Array.isArray(messages)) {
+    const errorMessage = (data as { ErrorMessage?: unknown } | null)
+      ?.ErrorMessage;
+    return typeof errorMessage === 'string' ? errorMessage : null;
+  }
+  const failed = messages.find(
+    (m: { Status?: string }) => m?.Status !== 'success',
+  );
+  if (!failed) return null;
+  const detail = failed.Errors?.[0]?.ErrorMessage;
+  return `Mailjet rejected the message${detail ? `: ${detail}` : ''}`;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -229,6 +287,90 @@ export class MailSenderService {
     }
   }
 
+  /**
+   * HTTPS delivery for hosts that block outbound SMTP ports (e.g. Railway
+   * below Pro). The From address still comes from the saved SMTP config.
+   *
+   * INTERIM: env-var-only Mailjet path to unblock invites on Railway; it skips
+   * the SMTP circuit breaker and has no UI/config-store support. Revisit with a
+   * proper pluggable mail-provider setting (or drop it if SMTP egress opens).
+   */
+  private async sendViaMailjet(
+    bodyData: MailBody,
+    smtpConfig: SmtpConfig,
+    html: string,
+    credentials: MailjetCredentials,
+    deadlineMs: number,
+  ): Promise<MailSendResult> {
+    const toRecipients = (emails?: string[]) =>
+      (emails ?? []).map((email) => ({ Email: email }));
+    const message: Record<string, unknown> = {
+      From: parseAddress(smtpConfig.fromEmail),
+      To: toRecipients(bodyData.sendEmailTo),
+      Subject: bodyData.subject,
+      HTMLPart: html,
+    };
+    if (bodyData.sendCcTo?.length) {
+      message.Cc = toRecipients(bodyData.sendCcTo);
+    }
+    if (bodyData.attachments?.length) {
+      message.Attachments = bodyData.attachments.map(toMailjetAttachment);
+    }
+
+    try {
+      const response = await axios.post(
+        MAILJET_SEND_URL,
+        { Messages: [message] },
+        {
+          auth: {
+            username: credentials.apiKey,
+            password: credentials.secretKey,
+          },
+          timeout: deadlineMs,
+        },
+      );
+      const rejected = mailjetRejection(response.data);
+      if (rejected) {
+        this.logger.error('Mail send error', {
+          error: rejected,
+          kind: 'permanent',
+          via: 'mailjet',
+        });
+        return { status: 'permanent', error: rejected };
+      }
+      this.recordAudit(bodyData, smtpConfig);
+      return { status: 'sent' };
+    } catch (error) {
+      if (!axios.isAxiosError(error)) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error('Mail send error', {
+          error: message,
+          kind: 'transient',
+          via: 'mailjet',
+        });
+        return { status: 'transient', error: message };
+      }
+      const status = error.response?.status;
+      const message =
+        mailjetRejection(error.response?.data) ??
+        (status ? `Mailjet responded ${status}` : error.message);
+      if (!status && (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT')) {
+        // The request may have reached Mailjet; retrying risks a duplicate.
+        this.logger.error('Mail send deadline exceeded; not retrying', {
+          error: message,
+          via: 'mailjet',
+        });
+        return { status: 'indeterminate', error: message };
+      }
+      const kind =
+        status && status >= 400 && status < 500 && status !== 429
+          ? 'permanent'
+          : 'transient';
+      this.logger.error('Mail send error', { error: message, kind, via: 'mailjet' });
+      return { status: kind, error: message };
+    }
+  }
+
   /** Returns the outcome instead of throwing, so the caller decides on retry. */
   async send(
     bodyData: MailBody,
@@ -250,6 +392,17 @@ export class MailSenderService {
             : 'Failed to render email template';
       this.logger.error('Mail template error', { error: message });
       return { status: 'permanent', error: message };
+    }
+
+    const mailjet = mailjetCredentials();
+    if (mailjet) {
+      return this.sendViaMailjet(
+        bodyData,
+        smtpConfig,
+        emailContent,
+        mailjet,
+        deadlineMs,
+      );
     }
 
     const key = smtpConfigKey(smtpConfig);

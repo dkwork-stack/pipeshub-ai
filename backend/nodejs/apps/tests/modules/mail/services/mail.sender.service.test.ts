@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import nodemailer from 'nodemailer';
+import axios from 'axios';
 import { MailSenderService } from '../../../../src/modules/mail/services/mail.sender.service';
 import { MailModel } from '../../../../src/modules/mail/schema/mailInfo.schema';
 
@@ -256,5 +257,82 @@ describe('MailSenderService', () => {
     finishOldSend();
     expect((await inFlight).status).to.equal('sent');
     expect(oldClose.calledOnce).to.be.true;
+  });
+  describe('Mailjet HTTPS delivery (interim)', () => {
+    let postStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      process.env.MAILJET_API_KEY = 'key';
+      process.env.MAILJET_SECRET_KEY = 'secret';
+      postStub = sinon.stub(axios, 'post');
+    });
+
+    afterEach(() => {
+      delete process.env.MAILJET_API_KEY;
+      delete process.env.MAILJET_SECRET_KEY;
+    });
+
+    it('sends through Mailjet instead of SMTP when credentials are set', async () => {
+      postStub.resolves({ data: { Messages: [{ Status: 'success' }] } });
+      const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+
+      const result = await sender.send(
+        { ...body, sendCcTo: ['cc@example.com'] },
+        { ...smtp, fromEmail: 'Acme <no-reply@example.com>' },
+      );
+
+      expect(result.status).to.equal('sent');
+      expect(sendMailStub.called).to.be.false;
+      const [url, payload, config] = postStub.firstCall.args;
+      expect(url).to.equal('https://api.mailjet.com/v3.1/send');
+      expect(config.auth).to.deep.equal({ username: 'key', password: 'secret' });
+      const message = payload.Messages[0];
+      expect(message.From).to.deep.equal({ Email: 'no-reply@example.com', Name: 'Acme' });
+      expect(message.To).to.deep.equal([{ Email: 'user@example.com' }]);
+      expect(message.Cc).to.deep.equal([{ Email: 'cc@example.com' }]);
+      expect(message.Subject).to.equal('Invite');
+      expect(message.HTMLPart).to.be.a('string').and.not.empty;
+    });
+
+    it('treats a Mailjet 4xx (bad sender, bad auth) as permanent', async () => {
+      postStub.rejects(
+        Object.assign(new Error('Request failed'), {
+          isAxiosError: true,
+          response: {
+            status: 400,
+            data: { Messages: [{ Status: 'error', Errors: [{ ErrorMessage: 'sender not validated' }] }] },
+          },
+        }),
+      );
+      const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+
+      const result = await sender.send(body, smtp);
+
+      expect(result).to.deep.equal({
+        status: 'permanent',
+        error: 'Mailjet rejected the message: sender not validated',
+      });
+    });
+
+    it('retries on Mailjet 5xx or rate limiting', async () => {
+      postStub.rejects(
+        Object.assign(new Error('Request failed'), {
+          isAxiosError: true,
+          response: { status: 429, data: {} },
+        }),
+      );
+      const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+
+      expect((await sender.send(body, smtp)).status).to.equal('transient');
+    });
+
+    it('does not retry a timed-out request that may have been delivered', async () => {
+      postStub.rejects(
+        Object.assign(new Error('timeout'), { isAxiosError: true, code: 'ECONNABORTED' }),
+      );
+      const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+
+      expect((await sender.send(body, smtp)).status).to.equal('indeterminate');
+    });
   });
 });
